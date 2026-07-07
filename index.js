@@ -1,20 +1,26 @@
 /**
  * Wild Offscreen — SillyTavern Extension
  * Tracks offscreen NPC lives via HuggingFace API.
- * Uses correct ST imports from world-info.js for reliable lorebook access.
  */
 
 'use strict';
 
 import { extension_settings, saveMetadataDebounced } from '../../../extensions.js';
-import { saveSettingsDebounced, eventSource, event_types, setExtensionPrompt } from '../../../../script.js';
-import { world_info, world_names, getCharaFilename } from '../../../world-info.js';
-import { characters, this_chid, chat_metadata } from '../../../../script.js';
+import {
+    saveSettingsDebounced,
+    eventSource,
+    event_types,
+    setExtensionPrompt,
+    chat_metadata,
+    characters,
+    this_chid,
+} from '../../../../script.js';
+import { world_info } from '../../../world-info.js';
 
 // ── Constants ──────────────────────────────────────────────
 
 const EXT = 'wild-offscreen';
-const INJECTION_POSITION = 1; // system prompt
+const INJECTION_POSITION = 1;
 
 const DEFAULTS = {
     enabled: true,
@@ -26,7 +32,6 @@ const DEFAULTS = {
 };
 
 const CATEGORIES = ['Personal', 'Relationship', 'Status', 'Discovery', 'Social'];
-
 const SCALE = [
     { min: 1,  max: 8,  id: 'minor',   label: 'MINOR'   },
     { min: 9,  max: 16, id: 'notable', label: 'NOTABLE' },
@@ -47,7 +52,7 @@ function getSettings() {
     return extension_settings[EXT];
 }
 
-// ── NPC storage (per-chat in chatMetadata) ─────────────────
+// ── NPC storage ────────────────────────────────────────────
 
 function getNPCs() {
     if (!chat_metadata.wild_offscreen_npcs) chat_metadata.wild_offscreen_npcs = {};
@@ -64,11 +69,9 @@ async function saveNPCs(npcs) {
 function isNPCEntry(entry) {
     const pos = entry.position ?? entry.extensions?.position ?? entry.insertion_position ?? null;
     const isBeforeChar = pos === 0 || pos === 'before_char';
-
     const keys = entry.key || entry.keys || [];
     const keyArr = Array.isArray(keys) ? keys : [keys];
     const hasCharKw = keyArr.some(k => typeof k === 'string' && k.toLowerCase().trim() === 'character');
-
     return isBeforeChar || hasCharKw;
 }
 
@@ -79,12 +82,47 @@ function extractNPCInfo(entry) {
     return { name: name.trim(), description: (entry.content || '').trim() };
 }
 
-// ── Lorebook fetching ──────────────────────────────────────
+// ── Lorebook access ────────────────────────────────────────
 
 /**
- * Fetch a lorebook's entries by name via ST API.
- * This is the correct method used by CarrotKernel.
+ * Get lorebook names for the current character.
+ * Uses character's primary world + charLore extra books + chat-level book.
  */
+function getCharacterLorebookNames() {
+    const names = new Set();
+
+    try {
+        // Primary lorebook from character card
+        if (this_chid !== undefined && this_chid !== null && characters?.[this_chid]) {
+            const primary = characters[this_chid]?.data?.extensions?.world;
+            if (primary) names.add(primary);
+
+            // Extra books from world_info.charLore
+            // charLore entries use the character's filename (name without path/ext)
+            const charName = characters[this_chid]?.name;
+            const charFilename = characters[this_chid]?.avatar?.replace(/\.[^.]+$/, '') || charName;
+            const charLore = world_info?.charLore || [];
+
+            for (const entry of charLore) {
+                // Match by filename or by character name
+                if (entry.name === charFilename || entry.name === charName) {
+                    (entry.extraBooks || []).forEach(b => names.add(b));
+                }
+            }
+        }
+    } catch (e) {
+        console.warn('[WildOffscreen] Error reading character lorebooks:', e.message);
+    }
+
+    // Chat-level lorebook
+    if (chat_metadata?.world_info) names.add(chat_metadata.world_info);
+    if (Array.isArray(chat_metadata?.carrot_chat_books)) {
+        chat_metadata.carrot_chat_books.forEach(b => names.add(b));
+    }
+
+    return [...names].filter(Boolean);
+}
+
 async function fetchBookEntries(bookName) {
     if (!bookName) return [];
     try {
@@ -95,83 +133,37 @@ async function fetchBookEntries(bookName) {
         });
         if (!r.ok) return [];
         const data = await r.json();
-        if (data?.entries) return Object.values(data.entries);
-        return [];
+        return data?.entries ? Object.values(data.entries) : [];
     } catch (e) {
         console.warn('[WildOffscreen] fetchBookEntries failed:', e.message);
         return [];
     }
 }
 
-/**
- * Get lorebook names attached to current character.
- * Mirrors CarrotKernel's lorebook-connector.js logic exactly.
- */
-function getCharacterLorebookNames() {
-    const names = new Set();
-
-    // Method 1: primary book from character.data.extensions.world
-    if (this_chid !== undefined && this_chid !== null && characters[this_chid]) {
-        const primary = characters[this_chid]?.data?.extensions?.world;
-        if (primary) names.add(primary);
-
-        // Method 2: extra books from world_info.charLore
-        const charFilename = getCharaFilename(this_chid);
-        const charLore = world_info?.charLore || [];
-        const charEntry = charLore.find(e => e.name === charFilename);
-        if (charEntry?.extraBooks) {
-            charEntry.extraBooks.forEach(b => names.add(b));
-        }
-    }
-
-    // Method 3: chat-level lorebook from chat_metadata
-    if (chat_metadata?.world_info) names.add(chat_metadata.world_info);
-    if (Array.isArray(chat_metadata?.carrot_chat_books)) {
-        chat_metadata.carrot_chat_books.forEach(b => names.add(b));
-    }
-
-    return [...names].filter(Boolean);
-}
-
-/**
- * Scan all lorebooks attached to current character for NPC entries.
- */
 async function scanCharacterLorebooks() {
     const bookNames = getCharacterLorebookNames();
-    console.log('[WildOffscreen] Scanning books:', bookNames);
-
-    if (bookNames.length === 0) return { npcs: [], bookNames: [] };
+    console.log('[WildOffscreen] Books found:', bookNames);
 
     const npcs = [];
     for (const bookName of bookNames) {
         const entries = await fetchBookEntries(bookName);
-        console.log(`[WildOffscreen] Book "${bookName}": ${entries.length} entries`);
-
+        console.log(`[WildOffscreen] "${bookName}": ${entries.length} entries`);
         for (const entry of entries) {
             if (!isNPCEntry(entry)) continue;
             const info = extractNPCInfo(entry);
-            if (info) {
-                npcs.push(info);
-                console.log(`[WildOffscreen]   ✓ NPC: ${info.name}`);
-            }
+            if (info) { npcs.push(info); console.log(`[WildOffscreen]   ✓ ${info.name}`); }
         }
     }
-
     return { npcs, bookNames };
 }
 
-/**
- * Debug: fetch first 5 entries raw so user can see the structure.
- */
 async function debugFirstEntries() {
     const bookNames = getCharacterLorebookNames();
-    if (bookNames.length === 0) {
-        return { error: 'No lorebooks found for current character. Make sure a lorebook is attached to this character.', bookNames: [] };
+    if (!bookNames.length) {
+        return { error: 'No lorebooks found for current character. Attach a lorebook to this character card first.', bookNames: [] };
     }
-
     const firstBook = bookNames[0];
     const entries = await fetchBookEntries(firstBook);
-
     return {
         bookNames,
         activeBook: firstBook,
@@ -185,21 +177,7 @@ async function debugFirstEntries() {
     };
 }
 
-function registerNPCs(scanned) {
-    const npcs = getNPCs();
-    let added = 0;
-    for (const { name, description } of scanned) {
-        if (!npcs[name]) {
-            npcs[name] = { name, description, enabled: true, events: [] };
-            added++;
-        } else {
-            npcs[name].description = description;
-        }
-    }
-    return { npcs, added };
-}
-
-// ── File loading fallback ──────────────────────────────────
+// ── File loading ───────────────────────────────────────────
 
 async function loadFromFile(file) {
     return new Promise((resolve, reject) => {
@@ -212,15 +190,9 @@ async function loadFromFile(file) {
 
 function parseLorebookJSON(data) {
     let entries = [];
-    if (data.entries && typeof data.entries === 'object') {
-        entries = Object.values(data.entries);
-    } else if (Array.isArray(data)) {
-        entries = data;
-    } else {
-        for (const val of Object.values(data)) {
-            if (val?.entries) { entries = Object.values(val.entries); break; }
-        }
-    }
+    if (data.entries && typeof data.entries === 'object') entries = Object.values(data.entries);
+    else if (Array.isArray(data)) entries = data;
+    else { for (const val of Object.values(data)) { if (val?.entries) { entries = Object.values(val.entries); break; } } }
     const found = [];
     for (const e of entries) {
         if (!isNPCEntry(e)) continue;
@@ -230,6 +202,16 @@ function parseLorebookJSON(data) {
     return found;
 }
 
+function registerNPCs(scanned) {
+    const npcs = getNPCs();
+    let added = 0;
+    for (const { name, description } of scanned) {
+        if (!npcs[name]) { npcs[name] = { name, description, enabled: true, events: [] }; added++; }
+        else npcs[name].description = description;
+    }
+    return { npcs, added };
+}
+
 // ── Event generation ───────────────────────────────────────
 
 function rollD20() { return Math.floor(Math.random() * 20) + 1; }
@@ -237,23 +219,19 @@ function getScale(roll) { return SCALE.find(s => roll >= s.min && roll <= s.max)
 function getCategory() { return CATEGORIES[Math.floor(Math.random() * CATEGORIES.length)]; }
 
 function buildHFPrompt(npc, scale, category, isPositive) {
-    const impact = isPositive ? 'positive' : 'negative';
     const history = npc.events.slice(-3).map(e => `- ${e.text}`).join('\n') || 'No previous events.';
     return `<s>[INST] You are a narrator generating offscreen story events for a roleplay character.
 
 CHARACTER: ${npc.name}
 DESCRIPTION: ${npc.description.slice(0, 600)}
 
-RECENT EVENTS (context, do NOT repeat):
+RECENT EVENTS (do NOT repeat):
 ${history}
 
-TASK: Generate ONE new offscreen event for ${npc.name}.
-- Scale: ${scale.label}
-- Category: ${category}
-- Impact: ${impact}
-- Be influenced by recent events if relevant
-- Two sentences: what happened, then the consequence.
-- English only. No dialogue. No meta. Just the event.
+Generate ONE new offscreen event for ${npc.name}.
+Scale: ${scale.label} | Category: ${category} | Impact: ${isPositive ? 'positive' : 'negative'}
+Two sentences: what happened, then the consequence.
+English only. No dialogue. No meta.
 
 Output only the two sentences. [/INST]`;
 }
@@ -290,7 +268,6 @@ async function runGenerationCycle() {
     if (!keys.length) return;
 
     $('#wo_status').text('Generating offscreen events…').show();
-
     for (const key of keys) {
         const npc = npcs[key];
         const event = await generateEventForNPC(npc);
@@ -298,7 +275,6 @@ async function runGenerationCycle() {
         npc.events.push(event);
         if (npc.events.length > s.maxEvents) npc.events = npc.events.slice(-s.maxEvents);
     }
-
     await saveNPCs(npcs);
     updateInjection();
     renderNPCList();
@@ -324,7 +300,9 @@ function buildInjectionText(npcs, injectMax) {
         return `• ${npc.name}:\n${evLines}`;
     });
 
-    return '[OFF-SCREEN NPC UPDATES — use when character enters scene. Do NOT generate this block yourself.]\n' + lines.join('\n') + '\n[/OFF-SCREEN NPC UPDATES]';
+    return '[OFF-SCREEN NPC UPDATES — use when character enters scene. Do NOT generate this block yourself.]\n'
+        + lines.join('\n')
+        + '\n[/OFF-SCREEN NPC UPDATES]';
 }
 
 function updateInjection() {
@@ -387,22 +365,19 @@ function renderNPCList() {
             }
         }
 
-        card.find('.wo_npc_header').on('click', function(e) {
+        card.find('.wo_npc_header').on('click', function (e) {
             if ($(e.target).closest('.wo_npc_actions').length) return;
             evContainer.slideToggle(150);
         });
-
         card.find('.wo_btn_toggle').on('click', async () => {
             const n = getNPCs(); n[key].enabled = !n[key].enabled;
             await saveNPCs(n); renderNPCList(); updateInjection();
         });
-
         card.find('.wo_btn_clear').on('click', async () => {
             if (!confirm(`Clear all events for ${key}?`)) return;
             const n = getNPCs(); n[key].events = [];
             await saveNPCs(n); renderNPCList(); updateInjection();
         });
-
         card.find('.wo_btn_delete').on('click', async () => {
             if (!confirm(`Remove ${key} from tracking?`)) return;
             const n = getNPCs(); delete n[key];
@@ -436,11 +411,9 @@ function buildUI() {
                 <input type="button" id="wo_debug" class="menu_button" value="🔎 Debug" />
             </div>
             <div id="wo_debug_out" class="wo_debug_out" style="display:none;"></div>
-
             <div class="wo_actions" style="margin-top:6px;">
                 <input type="button" id="wo_generate_now" class="menu_button" value="⚡ Generate Now" />
             </div>
-
             <hr>
             <label><small>HuggingFace API Token</small></label>
             <input type="password" id="wo_hf_token" class="text_pole" placeholder="hf_..." />
@@ -469,17 +442,15 @@ jQuery(async () => {
     $('#wo_trigger_every').val(s.triggerEvery);
     $('#wo_max_events').val(s.maxEvents);
     $('#wo_inject_max').val(s.injectMaxMessages);
-
     renderNPCList();
 
-    $('#wo_toggle').on('change', function() { s.enabled = this.checked; saveSettingsDebounced(); updateInjection(); });
-    $('#wo_hf_token').on('input', function() { s.hfToken = this.value.trim(); saveSettingsDebounced(); });
-    $('#wo_hf_model').on('input', function() { s.hfModel = this.value.trim(); saveSettingsDebounced(); });
-    $('#wo_trigger_every').on('input', function() { s.triggerEvery = parseInt(this.value) || DEFAULTS.triggerEvery; saveSettingsDebounced(); });
-    $('#wo_max_events').on('input', function() { s.maxEvents = parseInt(this.value) || DEFAULTS.maxEvents; saveSettingsDebounced(); });
-    $('#wo_inject_max').on('input', function() { s.injectMaxMessages = parseInt(this.value) || 0; saveSettingsDebounced(); });
+    $('#wo_toggle').on('change', function () { s.enabled = this.checked; saveSettingsDebounced(); updateInjection(); });
+    $('#wo_hf_token').on('input', function () { s.hfToken = this.value.trim(); saveSettingsDebounced(); });
+    $('#wo_hf_model').on('input', function () { s.hfModel = this.value.trim(); saveSettingsDebounced(); });
+    $('#wo_trigger_every').on('input', function () { s.triggerEvery = parseInt(this.value) || DEFAULTS.triggerEvery; saveSettingsDebounced(); });
+    $('#wo_max_events').on('input', function () { s.maxEvents = parseInt(this.value) || DEFAULTS.maxEvents; saveSettingsDebounced(); });
+    $('#wo_inject_max').on('input', function () { s.injectMaxMessages = parseInt(this.value) || 0; saveSettingsDebounced(); });
 
-    // ── Scan character lorebook ──
     $('#wo_scan').on('click', async () => {
         $('#wo_status').text('Scanning…').show();
         try {
@@ -488,13 +459,13 @@ jQuery(async () => {
                 const books = bookNames.length ? `Books checked: ${bookNames.join(', ')}` : 'No lorebook attached to this character.';
                 toastr.warning(`No NPC entries found. ${books}\nEntries need position "before_char" or keyword "character".`);
                 $('#wo_book_info').text(bookNames.length ? `📖 ${bookNames.join(', ')} — 0 NPCs` : 'No lorebook attached');
-                $('#wo_status').hide(); return;
+            } else {
+                const { npcs, added } = registerNPCs(found);
+                await saveNPCs(npcs);
+                renderNPCList(); updateInjection();
+                $('#wo_book_info').text(`📖 ${bookNames.join(', ')} — ${found.length} NPCs`);
+                toastr.success(`Scan complete: ${found.length} NPCs found, ${added} newly added.`);
             }
-            const { npcs, added } = registerNPCs(found);
-            await saveNPCs(npcs);
-            renderNPCList(); updateInjection();
-            $('#wo_book_info').text(`📖 ${bookNames.join(', ')} — ${found.length} NPCs`);
-            toastr.success(`Scan complete: ${found.length} NPCs found, ${added} newly added.`);
         } catch (e) {
             toastr.error('Scan failed: ' + e.message);
             console.error('[WildOffscreen]', e);
@@ -502,36 +473,29 @@ jQuery(async () => {
         $('#wo_status').hide();
     });
 
-    // ── Load JSON file ──
-    $('#wo_file_input').on('change', async function() {
+    $('#wo_file_input').on('change', async function () {
         const file = this.files?.[0]; if (!file) return;
         try {
             const data = await loadFromFile(file);
             const found = parseLorebookJSON(data);
             if (!found.length) { toastr.warning('No NPC entries found. Entries need position "before_char" or keyword "character".'); return; }
             const { npcs, added } = registerNPCs(found);
-            await saveNPCs(npcs);
-            renderNPCList(); updateInjection();
+            await saveNPCs(npcs); renderNPCList(); updateInjection();
             $('#wo_book_info').text(`📂 ${file.name} — ${found.length} NPCs`);
             toastr.success(`Loaded: ${found.length} NPCs found, ${added} newly added.`);
         } catch (e) { toastr.error('Load failed: ' + e.message); }
         this.value = '';
     });
 
-    // ── Debug button ──
     $('#wo_debug').on('click', async () => {
         const out = $('#wo_debug_out');
         out.empty().show().append('<div class="wo_debug_title">Fetching…</div>');
         try {
             const info = await debugFirstEntries();
             out.empty();
-            if (info.error) {
-                out.append(`<div class="wo_debug_row" style="color:#ef5350;">❌ ${info.error}</div>`);
-                return;
-            }
-            out.append(`<div class="wo_debug_title">Books found: <code>${info.bookNames.join(', ') || 'none'}</code></div>`);
-            out.append(`<div class="wo_debug_title">Active book: <code>${info.activeBook}</code> — ${info.totalEntries} entries total</div>`);
-            out.append(`<div class="wo_debug_title">First 5 entries:</div>`);
+            if (info.error) { out.append(`<div class="wo_debug_row" style="color:#ef5350;">❌ ${info.error}</div>`); return; }
+            out.append(`<div class="wo_debug_title">Books: <code>${info.bookNames.join(', ') || 'none'}</code></div>`);
+            out.append(`<div class="wo_debug_title">Active: <code>${info.activeBook}</code> — ${info.totalEntries} entries</div>`);
             for (const e of info.sample) {
                 out.append(`<div class="wo_debug_entry">
                     <b>${e.name}</b>${e.disabled ? ' <span style="color:#ef5350">[disabled]</span>' : ''}<br>
@@ -539,19 +503,15 @@ jQuery(async () => {
                     keys: <code>${e.keys.join(', ') || '(none)'}</code>
                 </div>`);
             }
-        } catch (err) {
-            out.empty().append(`<div class="wo_debug_row" style="color:#ef5350;">Error: ${err.message}</div>`);
-        }
+        } catch (err) { out.empty().append(`<div class="wo_debug_row" style="color:#ef5350;">Error: ${err.message}</div>`); }
     });
 
-    // ── Generate now ──
     $('#wo_generate_now').on('click', async () => {
         if (!getSettings().hfToken) { toastr.error('HuggingFace API token required.'); return; }
         await runGenerationCycle();
         toastr.success('Offscreen events generated.');
     });
 
-    // ── Hooks ──
     eventSource.on(event_types.GENERATION_STARTED, onGenerationStarted);
     eventSource.on(event_types.CHAT_CHANGED, () => {
         msgCounter = 0; renderNPCList(); updateInjection();
