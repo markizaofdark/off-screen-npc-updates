@@ -154,15 +154,24 @@ async function fetchBookEntries(bookName) {
     const globalWI = window.world_info || window.worldInfo;
     if (!globalWI) return [];
 
-    // Structure A: { bookName: { entries: {...} } }
+    // Structure A: array (keys 0,1,2...)
+    if (Array.isArray(globalWI)) {
+        const firstItem = globalWI[0];
+        if (firstItem && (firstItem.content !== undefined || firstItem.key !== undefined)) {
+            return globalWI; // array of entries directly
+        } else if (firstItem?.entries) {
+            const book = globalWI.find(b => b.name === bookName || b.displayName === bookName);
+            if (book) return Object.values(book.entries);
+            return globalWI.flatMap(b => b.entries ? Object.values(b.entries) : []);
+        }
+        return globalWI;
+    }
+
+    // Structure B: { bookName: { entries: {...} } }
     if (globalWI[bookName]?.entries) return Object.values(globalWI[bookName].entries);
-    if (Array.isArray(globalWI[bookName])) return globalWI[bookName];
 
-    // Structure B: flat { entries: {...} }
+    // Structure C: flat { entries: {...} }
     if (globalWI.entries) return Object.values(globalWI.entries);
-
-    // Structure C: array
-    if (Array.isArray(globalWI)) return globalWI;
 
     return [];
 }
