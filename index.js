@@ -125,19 +125,32 @@ function getCharacterLorebookNames() {
 
 async function fetchBookEntries(bookName) {
     if (!bookName) return [];
-    try {
-        const r = await fetch('/api/worldinfo/get', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: bookName }),
-        });
-        if (!r.ok) return [];
-        const data = await r.json();
-        return data?.entries ? Object.values(data.entries) : [];
-    } catch (e) {
-        console.warn('[WildOffscreen] fetchBookEntries failed:', e.message);
-        return [];
+
+    const endpoints = [
+        { url: '/api/worldinfo/get', method: 'POST', body: { name: bookName } },
+        { url: '/api/worldinfo/getone', method: 'POST', body: { name: bookName } },
+        { url: `/api/worldinfo/${encodeURIComponent(bookName)}`, method: 'GET', body: null },
+        { url: '/api/world_info/get', method: 'POST', body: { name: bookName } },
+    ];
+
+    for (const ep of endpoints) {
+        try {
+            const opts = { method: ep.method, headers: { 'Content-Type': 'application/json' } };
+            if (ep.body) opts.body = JSON.stringify(ep.body);
+            const r = await fetch(ep.url, opts);
+            if (!r.ok) continue;
+            const text = await r.text();
+            if (!text || text.trim().startsWith('<')) continue;
+            const data = JSON.parse(text);
+            if (data?.entries) return Object.values(data.entries);
+            if (Array.isArray(data)) return data;
+        } catch (e) {
+            console.warn(`[WildOffscreen] ${ep.url} failed:`, e.message);
+        }
     }
+
+    console.warn('[WildOffscreen] All endpoints failed for book:', bookName);
+    return [];
 }
 
 async function scanCharacterLorebooks() {
@@ -164,24 +177,54 @@ async function debugFirstEntries() {
     }
     const firstBook = bookNames[0];
 
-    // Raw API response for debugging
+    // Try multiple endpoints to find which one works
     let rawResponse = null;
     let rawKeys = [];
     let entries = [];
-    try {
-        const r = await fetch('/api/worldinfo/get', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: firstBook }),
-        });
-        const text = await r.text();
-        rawResponse = text.slice(0, 300); // first 300 chars
-        const data = JSON.parse(text);
-        rawKeys = Object.keys(data || {});
-        if (data?.entries) entries = Object.values(data.entries);
-        else if (Array.isArray(data)) entries = data;
-    } catch(e) {
-        return { error: 'API fetch failed: ' + e.message, bookNames, activeBook: firstBook };
+    let workingEndpoint = null;
+
+    const endpoints = [
+        { url: '/api/worldinfo/get', method: 'POST', body: { name: firstBook } },
+        { url: '/api/worldinfo/getone', method: 'POST', body: { name: firstBook } },
+        { url: `/api/worldinfo/${encodeURIComponent(firstBook)}`, method: 'GET', body: null },
+        { url: '/api/world_info/get', method: 'POST', body: { name: firstBook } },
+    ];
+
+    for (const ep of endpoints) {
+        try {
+            const opts = { method: ep.method, headers: { 'Content-Type': 'application/json' } };
+            if (ep.body) opts.body = JSON.stringify(ep.body);
+            const r = await fetch(ep.url, opts);
+            const text = await r.text();
+            if (!text || text.trim().startsWith('<')) {
+                rawResponse = `[${ep.url}] → HTML/error (status ${r.status})`;
+                continue;
+            }
+            const data = JSON.parse(text);
+            rawKeys = Object.keys(data || {});
+            rawResponse = `[${ep.url}] → OK! Keys: ${rawKeys.join(', ')}`;
+            workingEndpoint = ep.url;
+            if (data?.entries) entries = Object.values(data.entries);
+            else if (Array.isArray(data)) entries = data;
+            break;
+        } catch(e) {
+            rawResponse = (rawResponse ? rawResponse + ' | ' : '') + `[${ep.url}] → ${e.message}`;
+        }
+    }
+
+    if (!workingEndpoint && entries.length === 0) {
+        // Last resort: try window globals directly
+        const globalWI = window.world_info || window.worldInfo;
+        if (globalWI) {
+            rawResponse += ' | Trying window.world_info...';
+            const allEntries = globalWI.entries
+                ? Object.values(globalWI.entries)
+                : Array.isArray(globalWI) ? globalWI : [];
+            // Filter to entries that might belong to our book
+            entries = allEntries;
+            rawKeys = ['window.world_info (global)'];
+            workingEndpoint = 'window.world_info';
+        }
     }
 
     return {
