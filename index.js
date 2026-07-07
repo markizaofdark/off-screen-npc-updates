@@ -16,22 +16,19 @@ import {
 // ── Constants ──────────────────────────────────────────────
 
 const EXT = 'wild-offscreen';
-const INJECTION_POSITION = 1; // system prompt
+const INJECTION_POSITION = 1;
 
 const DEFAULTS = {
     enabled: true,
     hfToken: '',
     hfModel: 'mistralai/Mistral-7B-Instruct-v0.3',
-    triggerEvery: 5,       // generate events every N messages
-    maxEvents: 7,          // max stored events per NPC
-    injectMaxMessages: 0,  // 0 = inject all NPCs; N = only NPCs seen in last N messages
-    selectedLorebook: '',  // name of lorebook to scan
+    triggerEvery: 5,
+    maxEvents: 7,
+    injectMaxMessages: 0,
 };
 
-// Event categories with weights (higher = more likely on low rolls)
 const CATEGORIES = ['Personal', 'Relationship', 'Status', 'Discovery', 'Social'];
 
-// Scale thresholds based on d20 roll
 const SCALE = [
     { min: 1,  max: 8,  id: 'minor',   label: 'MINOR'   },
     { min: 9,  max: 16, id: 'notable', label: 'NOTABLE' },
@@ -40,9 +37,10 @@ const SCALE = [
 
 // ── State ──────────────────────────────────────────────────
 
-let msgCounter = 0; // counts messages since last event generation cycle
+let msgCounter = 0;
+let loadedBookName = ''; // name of the currently loaded lorebook
 
-// ── Settings & NPC data helpers ────────────────────────────
+// ── Settings & NPC helpers ─────────────────────────────────
 
 function getSettings() {
     if (!extension_settings[EXT]) extension_settings[EXT] = {};
@@ -54,7 +52,6 @@ function getSettings() {
     return extension_settings[EXT];
 }
 
-/** NPC data is stored per-chat in chatMetadata */
 function getNPCs() {
     const ctx = getContext();
     if (!ctx.chatMetadata) return {};
@@ -69,198 +66,148 @@ function saveNPCs(npcs) {
     ctx.saveMetadata();
 }
 
-// ── Lore scanning ──────────────────────────────────────────
+// ── Lorebook parsing ──────────────────────────────────────
 
 /**
- * Returns a list of all available lorebook names ST knows about.
- * Tries multiple locations ST uses across versions.
+ * Checks if entry is a before_char NPC entry.
+ * Two conditions (either is enough):
+ *   1. position === 0 or "before_char"
+ *   2. keys array contains "character"
  */
-function getAvailableLorebooks() {
-    const names = new Set();
+function isNPCEntry(entry) {
+    // Condition 1: position check
+    const pos = entry.position
+        ?? entry.extensions?.position
+        ?? entry.insertion_position
+        ?? null;
+    const isBeforeChar = pos === 0 || pos === 'before_char';
 
-    // Primary source: ST's world_names array — these are the actual file/display names
-    if (Array.isArray(window.world_names)) {
-        for (const n of window.world_names) if (n) names.add(n);
-    }
+    // Condition 2: keyword check
+    const keys = entry.key || entry.keys || [];
+    const keyArray = Array.isArray(keys) ? keys : [keys];
+    const hasCharacterKeyword = keyArray.some(k =>
+        typeof k === 'string' && k.toLowerCase().trim() === 'character'
+    );
 
-    // ST >= 1.12 worldInfoData is keyed by name
-    if (window.worldInfoData && typeof window.worldInfoData === 'object') {
-        for (const k of Object.keys(window.worldInfoData)) {
-            // Skip numeric-only keys (those are entry IDs, not book names)
-            if (!/^\d+$/.test(k)) names.add(k);
-        }
-    }
-
-    // loaded_world_info may be an array of name strings
-    if (Array.isArray(window.loaded_world_info)) {
-        for (const n of window.loaded_world_info) if (n && typeof n === 'string') names.add(n);
-    }
-
-    // window.world_info is usually { [index]: data } — keys are numbers, skip for names
-    // but if somehow a version uses string keys, grab them
-    if (window.world_info && typeof window.world_info === 'object' && !Array.isArray(window.world_info)) {
-        for (const k of Object.keys(window.world_info)) {
-            if (!/^\d+$/.test(k)) names.add(k);
-        }
-    }
-
-    return [...names].sort();
+    return isBeforeChar || hasCharacterKeyword;
 }
 
 /**
- * Extracts entries array from a lorebook data object.
- * Handles: array, {entries:{...}}, numeric-keyed object {0:{...},1:{...}}.
+ * Extracts NPC name and description from a lorebook entry.
  */
-function extractEntries(lorebookData) {
-    if (!lorebookData) return [];
-    if (Array.isArray(lorebookData)) return lorebookData;
-    // Named entries object: { entries: { 0: {...}, 1: {...} } }
-    if (lorebookData.entries && typeof lorebookData.entries === 'object') {
-        return Object.values(lorebookData.entries);
-    }
-    // Flat numeric-keyed object: { 0: {...}, 1: {...} }
-    const vals = Object.values(lorebookData);
-    if (vals.length && vals[0] && typeof vals[0] === 'object' && ('content' in vals[0] || 'key' in vals[0])) {
-        return vals;
-    }
-    // One more level deep (some ST versions wrap everything)
-    const first = vals[0];
-    if (first && first.entries) return Object.values(first.entries);
-    return [];
+function extractNPCInfo(entry) {
+    // Skip disabled
+    if (entry.disable === true || entry.enabled === false) return null;
+
+    const name = entry.comment
+        || entry.name
+        || (Array.isArray(entry.key) ? entry.key[0] : entry.key)
+        || null;
+
+    if (!name || name.trim() === '') return null;
+
+    return {
+        name: name.trim(),
+        description: (entry.content || '').trim(),
+    };
 }
 
 /**
- * Scans a specific lorebook (by name) for NPC entries.
- * Match criteria (OR logic):
- *   1. position === before_char (0 or 'before_char')
- *   2. any key contains the word "character" (case-insensitive)
+ * Parses a lorebook JSON object and returns NPC list.
+ * Handles both formats:
+ *   - { entries: { "0": {...}, "1": {...} } }
+ *   - [ {...}, {...} ]
  */
-function scanLorebook(lorebookName) {
-    // --- Resolve raw entries ---
-    let rawEntries = [];
+function parseLorebookJSON(data) {
+    let entries = [];
 
-    if (lorebookName) {
-        // world_names[i] => world_info[i] mapping (most common ST layout)
-        if (Array.isArray(window.world_names) && window.world_info) {
-            const idx = window.world_names.indexOf(lorebookName);
-            if (idx !== -1 && window.world_info[idx]) {
-                rawEntries = extractEntries(window.world_info[idx]);
+    if (data.entries && typeof data.entries === 'object') {
+        entries = Object.values(data.entries);
+    } else if (Array.isArray(data)) {
+        entries = data;
+    } else {
+        // Try to find entries nested somewhere
+        for (const val of Object.values(data)) {
+            if (val && typeof val === 'object' && val.entries) {
+                entries = Object.values(val.entries);
+                break;
             }
         }
-        // Fallback: worldInfoData keyed by name
-        if (rawEntries.length === 0 && window.worldInfoData?.[lorebookName]) {
-            rawEntries = extractEntries(window.worldInfoData[lorebookName]);
-        }
-        // Fallback: world_info keyed by name directly
-        if (rawEntries.length === 0 && window.world_info?.[lorebookName]) {
-            rawEntries = extractEntries(window.world_info[lorebookName]);
-        }
     }
 
-    // Last resort: active lorebook from context
-    if (rawEntries.length === 0) {
-        const ctx = getContext();
-        const wi = ctx.worldInfo || ctx.world_info || {};
-        rawEntries = extractEntries(wi);
-    }
-
-    // --- Filter: before_char OR keyword contains "character" ---
     const found = [];
-    for (const entry of rawEntries) {
-        if (entry.disable === true || entry.enabled === false) continue;
-
-        const pos = entry.position ?? entry.extensions?.position ?? entry.insertion_position;
-        const isBeforeChar = pos === 0 || pos === 'before_char';
-
-        // Keys can be an array of strings
-        const keys = Array.isArray(entry.key) ? entry.key : (entry.key ? [entry.key] : []);
-        const hasCharacterKey = keys.some(k => /character/i.test(k));
-
-        if (!isBeforeChar && !hasCharacterKey) continue;
-
-        const name = entry.comment || entry.name || keys[0] || null;
-        if (!name) continue;
-
-        found.push({
-            name,
-            description: entry.content || '',
-            matchReason: isBeforeChar ? 'before_char' : 'keyword:character',
-        });
+    for (const entry of entries) {
+        if (!isNPCEntry(entry)) continue;
+        const info = extractNPCInfo(entry);
+        if (info) found.push(info);
     }
 
     return found;
 }
 
+/**
+ * Loads lorebook from a File object (user picked via file input).
+ */
+async function loadFromFile(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+            try {
+                const data = JSON.parse(reader.result);
+                resolve(data);
+            } catch (e) {
+                reject(new Error('Invalid JSON file'));
+            }
+        };
+        reader.onerror = () => reject(new Error('File read error'));
+        reader.readAsText(file);
+    });
+}
+
 function registerNPCs(scanned) {
     const npcs = getNPCs();
     let added = 0;
-
     for (const { name, description } of scanned) {
         if (!npcs[name]) {
-            npcs[name] = {
-                name,
-                description,
-                enabled: true,
-                events: [],
-            };
+            npcs[name] = { name, description, enabled: true, events: [] };
             added++;
         } else {
-            // Update description in case lorebook changed
             npcs[name].description = description;
         }
     }
-
     saveNPCs(npcs);
     return added;
 }
 
-// ── Event rolling ──────────────────────────────────────────
+// ── Event rolling & generation ─────────────────────────────
 
-function rollD20() {
-    return Math.floor(Math.random() * 20) + 1;
-}
+function rollD20() { return Math.floor(Math.random() * 20) + 1; }
+function getScale(roll) { return SCALE.find(s => roll >= s.min && roll <= s.max) || SCALE[0]; }
+function getCategory() { return CATEGORIES[Math.floor(Math.random() * CATEGORIES.length)]; }
 
-function getScale(roll) {
-    return SCALE.find(s => roll >= s.min && roll <= s.max) || SCALE[0];
-}
-
-function getCategory() {
-    return CATEGORIES[Math.floor(Math.random() * CATEGORIES.length)];
-}
-
-/**
- * Builds the HuggingFace prompt for one NPC event generation.
- * Sends character description + last events as context.
- */
 function buildHFPrompt(npc, scale, category, isPositive) {
     const impact = isPositive ? 'positive' : 'negative';
-    const recentHistory = npc.events.slice(-3).map(e => `- ${e.text}`).join('\n') || 'No previous events.';
+    const history = npc.events.slice(-3).map(e => `- ${e.text}`).join('\n') || 'No previous events.';
 
     return `<s>[INST] You are a narrator generating offscreen story events for a roleplay character.
 
 CHARACTER: ${npc.name}
 DESCRIPTION: ${npc.description.slice(0, 600)}
 
-RECENT EVENTS (for context, do NOT repeat these):
-${recentHistory}
+RECENT EVENTS (context — do NOT repeat):
+${history}
 
-TASK: Generate exactly ONE new offscreen event for ${npc.name}.
-Rules:
-- Scale: ${scale.label} (${scale.id})
+TASK: Generate ONE new offscreen event for ${npc.name}.
+- Scale: ${scale.label}
 - Category: ${category}
-- Impact: ${impact} for ${npc.name}
+- Impact: ${impact}
 - Must be influenced by recent events if relevant
-- Format: two sentences. First: what happened. Second: the immediate consequence.
-- English only. No dialogue. No meta-commentary. Just the event.
-- Keep it grounded and specific, not vague.
+- Two sentences: what happened, then the consequence.
+- English only. No dialogue. No meta. Just the event.
 
-Output only the two sentences, nothing else. [/INST]`;
+Output only the two sentences. [/INST]`;
 }
 
-/**
- * Calls HuggingFace Inference API.
- * Returns generated text string or null on failure.
- */
 async function callHF(prompt) {
     const s = getSettings();
     if (!s.hfToken) return null;
@@ -287,21 +234,16 @@ async function callHF(prompt) {
         );
 
         if (!response.ok) {
-            const err = await response.json().catch(() => ({}));
-            // Model loading — HF returns 503 when model is cold
             if (response.status === 503) {
-                console.warn('[WildOffscreen] Model loading, will retry next cycle.');
+                console.warn('[WildOffscreen] Model cold-starting, will retry next cycle.');
                 return null;
             }
-            console.error('[WildOffscreen] HF API error:', err);
+            console.error('[WildOffscreen] HF API error:', response.status);
             return null;
         }
 
         const data = await response.json();
-        const text = Array.isArray(data)
-            ? data[0]?.generated_text
-            : data?.generated_text;
-
+        const text = Array.isArray(data) ? data[0]?.generated_text : data?.generated_text;
         return text?.trim() || null;
     } catch (e) {
         console.error('[WildOffscreen] Fetch error:', e);
@@ -309,9 +251,6 @@ async function callHF(prompt) {
     }
 }
 
-/**
- * Generates one event for one NPC and stores it.
- */
 async function generateEventForNPC(npc) {
     const roll = rollD20();
     const scale = getScale(roll);
@@ -320,10 +259,9 @@ async function generateEventForNPC(npc) {
 
     const prompt = buildHFPrompt(npc, scale, category, isPositive);
     const text = await callHF(prompt);
-
     if (!text) return null;
 
-    const event = {
+    return {
         text,
         scale: scale.id,
         category,
@@ -331,22 +269,14 @@ async function generateEventForNPC(npc) {
         msgIndex: getContext().chat?.length ?? 0,
         timestamp: Date.now(),
     };
-
-    return event;
 }
 
-/**
- * Runs event generation cycle for all enabled NPCs.
- * Fires every triggerEvery messages.
- */
 async function runGenerationCycle() {
     const npcs = getNPCs();
     const s = getSettings();
     const keys = Object.keys(npcs).filter(k => npcs[k].enabled);
-
     if (keys.length === 0) return;
 
-    // Show loading indicator
     $('#wo_status').text('Generating offscreen events…').show();
 
     for (const key of keys) {
@@ -355,7 +285,6 @@ async function runGenerationCycle() {
         if (!event) continue;
 
         npc.events.push(event);
-        // Trim to max
         if (npc.events.length > s.maxEvents) {
             npc.events = npc.events.slice(-s.maxEvents);
         }
@@ -369,16 +298,10 @@ async function runGenerationCycle() {
 
 // ── Injection ──────────────────────────────────────────────
 
-/**
- * Builds the text block injected into the system prompt.
- * Main model uses this when a character enters a scene.
- */
 function buildInjectionText(npcs, injectMax) {
     const entries = Object.values(npcs).filter(n => n.enabled && n.events.length > 0);
-
     if (entries.length === 0) return '';
 
-    // If injectMax > 0, only include NPCs mentioned in last N chat messages
     let filtered = entries;
     if (injectMax > 0) {
         const ctx = getContext();
@@ -411,7 +334,6 @@ function updateInjection() {
         setExtensionPrompt(EXT, '', INJECTION_POSITION, 0);
         return;
     }
-
     const npcs = getNPCs();
     const text = buildInjectionText(npcs, s.injectMaxMessages);
     setExtensionPrompt(EXT, text, INJECTION_POSITION, 0, false, 0);
@@ -424,13 +346,10 @@ function onGenerationStarted() {
     if (!s.enabled || !s.hfToken) return;
 
     msgCounter++;
-
     if (msgCounter >= s.triggerEvery) {
         msgCounter = 0;
-        // Run async, don't block generation
         runGenerationCycle();
     }
-
     updateInjection();
 }
 
@@ -443,7 +362,7 @@ function renderNPCList() {
 
     const keys = Object.keys(npcs);
     if (keys.length === 0) {
-        container.append('<div class="wo_empty">No NPCs registered. Click Scan.</div>');
+        container.append('<div class="wo_empty">No NPCs registered. Load a lorebook below.</div>');
         return;
     }
 
@@ -466,7 +385,6 @@ function renderNPCList() {
             <div class="wo_npc_events" style="display:none;"></div>
         </div>`);
 
-        // Populate events
         const evContainer = card.find('.wo_npc_events');
         if (npc.events.length === 0) {
             evContainer.append('<div class="wo_no_events">No events yet.</div>');
@@ -482,13 +400,11 @@ function renderNPCList() {
             }
         }
 
-        // Toggle accordion
         card.find('.wo_npc_header').on('click', function (e) {
             if ($(e.target).closest('.wo_npc_actions').length) return;
             evContainer.slideToggle(150);
         });
 
-        // Enable/disable
         card.find('.wo_btn_toggle').on('click', () => {
             const n = getNPCs();
             n[key].enabled = !n[key].enabled;
@@ -497,7 +413,6 @@ function renderNPCList() {
             updateInjection();
         });
 
-        // Clear events
         card.find('.wo_btn_clear').on('click', () => {
             if (!confirm(`Clear all events for ${key}?`)) return;
             const n = getNPCs();
@@ -507,9 +422,8 @@ function renderNPCList() {
             updateInjection();
         });
 
-        // Delete NPC
         card.find('.wo_btn_delete').on('click', () => {
-            if (!confirm(`Remove ${key} from offscreen tracking?`)) return;
+            if (!confirm(`Remove ${key} from tracking?`)) return;
             const n = getNPCs();
             delete n[key];
             saveNPCs(n);
@@ -540,20 +454,12 @@ function buildUI() {
             <!-- NPC list -->
             <div id="wo_npc_list" class="wo_npc_list"></div>
 
-            <!-- Lorebook selector -->
-            <div class="wo_lorebook_row">
-                <label><small>Lorebook to scan</small></label>
-                <div class="wo_lorebook_select_wrap">
-                    <select id="wo_lorebook_select" class="text_pole wo_lorebook_select">
-                        <option value="">(auto — active lorebook)</option>
-                    </select>
-                    <input type="button" id="wo_lorebook_refresh" class="menu_button wo_lorebook_refresh_btn" title="Refresh lorebook list" value="↻" />
-                </div>
-            </div>
-
-            <!-- Actions -->
+            <!-- Lorebook loading -->
+            <div class="wo_section_label">Lorebook</div>
+            <div id="wo_book_info" class="wo_book_info">No lorebook loaded</div>
             <div class="wo_actions">
-                <input type="button" id="wo_scan" class="menu_button" value="⟳ Scan Lorebook" />
+                <label class="menu_button wo_file_btn" for="wo_file_input">📂 Load Lorebook</label>
+                <input type="file" id="wo_file_input" accept=".json" style="display:none;" />
                 <input type="button" id="wo_generate_now" class="menu_button" value="⚡ Generate Now" />
             </div>
 
@@ -581,31 +487,12 @@ function buildUI() {
     $('#extensions_settings').append(html);
 }
 
-// ── Lorebook selector ──────────────────────────────────────
-
-function populateLorebookSelect(savedValue) {
-    const select = $('#wo_lorebook_select');
-    const books = getAvailableLorebooks();
-    select.empty().append('<option value="">(auto — active lorebook)</option>');
-    for (const name of books) {
-        const opt = $('<option>').val(name).text(name);
-        if (name === savedValue) opt.prop('selected', true);
-        select.append(opt);
-    }
-    // If saved value not in list but non-empty, add it anyway so it isn't lost
-    if (savedValue && !books.includes(savedValue)) {
-        select.append($('<option>').val(savedValue).text(savedValue).prop('selected', true));
-    }
-}
-
 // ── Init ───────────────────────────────────────────────────
 
 jQuery(async () => {
     buildUI();
-
     const s = getSettings();
 
-    // Populate UI
     $('#wo_toggle').prop('checked', s.enabled);
     $('#wo_hf_token').val(s.hfToken);
     $('#wo_hf_model').val(s.hfModel);
@@ -614,7 +501,6 @@ jQuery(async () => {
     $('#wo_inject_max').val(s.injectMaxMessages);
 
     renderNPCList();
-    populateLorebookSelect(s.selectedLorebook);
 
     // ── Settings handlers ──
 
@@ -649,38 +535,39 @@ jQuery(async () => {
         saveSettingsDebounced();
     });
 
-    // ── Lorebook selector ──
-    $('#wo_lorebook_select').on('change', function () {
-        s.selectedLorebook = this.value;
-        saveSettingsDebounced();
-    });
+    // ── File picker — load lorebook JSON ──
+    $('#wo_file_input').on('change', async function () {
+        const file = this.files?.[0];
+        if (!file) return;
 
-    $('#wo_lorebook_refresh').on('click', () => {
-        populateLorebookSelect(s.selectedLorebook);
-        toastr.info('Lorebook list refreshed.');
-    });
+        try {
+            const data = await loadFromFile(file);
+            const npcs = parseLorebookJSON(data);
 
-    // ── Scan button ──
-    $('#wo_scan').on('click', () => {
-        const bookName = s.selectedLorebook || '';
-        const scanned = scanLorebook(bookName);
-        if (scanned.length === 0) {
-            const hint = bookName
-                ? `No before_char entries found in "${bookName}".`
-                : 'No before_char entries found in active lorebook. Try selecting one manually above.';
-            toastr.warning(hint);
-            return;
+            if (npcs.length === 0) {
+                toastr.warning('No NPC entries found. Make sure entries have position "before_char" or keyword "character" in keys.');
+                console.warn('[WildOffscreen] Parsed lorebook but found 0 matching entries. Total entries checked:', 
+                    data.entries ? Object.keys(data.entries).length : 'unknown');
+                return;
+            }
+
+            loadedBookName = file.name.replace('.json', '');
+            const added = registerNPCs(npcs);
+            renderNPCList();
+            updateInjection();
+
+            $('#wo_book_info').text(`📖 ${loadedBookName} — ${npcs.length} NPCs found`);
+            toastr.success(`Loaded: ${npcs.length} NPCs found, ${added} newly added.`);
+        } catch (e) {
+            toastr.error(`Failed to load lorebook: ${e.message}`);
+            console.error('[WildOffscreen] Load error:', e);
         }
-        const added = registerNPCs(scanned);
-        renderNPCList();
-        updateInjection();
-        const byPos = scanned.filter(e => e.matchReason === 'before_char').length;
-        const byKey = scanned.filter(e => e.matchReason !== 'before_char').length;
-        const detail = [byPos && `${byPos} by position`, byKey && `${byKey} by keyword`].filter(Boolean).join(', ');
-        toastr.success(`Scan complete: ${scanned.length} found (${detail}), ${added} newly registered.`);
+
+        // Reset file input so same file can be re-selected
+        this.value = '';
     });
 
-    // ── Generate now button ──
+    // ── Generate now ──
     $('#wo_generate_now').on('click', async () => {
         if (!s.hfToken) {
             toastr.error('HuggingFace API token required.');
@@ -690,16 +577,14 @@ jQuery(async () => {
         toastr.success('Offscreen events generated.');
     });
 
-    // ── Generation hook ──
+    // ── Hooks ──
     eventSource.on(event_types.GENERATION_STARTED, onGenerationStarted);
 
-    // ── Chat switch ──
     eventSource.on(event_types.CHAT_CHANGED, () => {
         msgCounter = 0;
         renderNPCList();
         updateInjection();
     });
 
-    // Initial injection on load
     updateInjection();
 });

@@ -110,36 +110,6 @@
     line-height: 1.4;
 }
 
-/* Lorebook selector row */
-.wo_lorebook_row {
-    margin: 6px 0 4px;
-}
-
-.wo_lorebook_row label {
-    display: block;
-    margin-bottom: 3px;
-}
-
-.wo_lorebook_select_wrap {
-    display: flex;
-    gap: 4px;
-    align-items: center;
-}
-
-.wo_lorebook_select {
-    flex: 1;
-    min-width: 0;
-}
-
-.wo_lorebook_refresh_btn {
-    flex-shrink: 0;
-    padding: 2px 7px;
-    font-size: 1em;
-    min-width: unset;
-    height: unset;
-    line-height: 1.5;
-}
-
 /* Actions row */
 .wo_actions {
     display: flex;
@@ -150,4 +120,25 @@
 .wo_actions .menu_button {
     flex: 1;
     font-size: 0.85em;
+}
+
+/* Lorebook info */
+.wo_section_label {
+    font-size: 0.82em;
+    font-weight: 600;
+    opacity: 0.6;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 8px;
+}
+
+.wo_book_info {
+    font-size: 0.85em;
+    opacity: 0.7;
+    padding: 4px 0;
+}
+
+.wo_file_btn {
+    cursor: pointer;
+    text-align: center;
 }
