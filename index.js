@@ -38,7 +38,7 @@ const SCALE = [
 // ── State ──────────────────────────────────────────────────
 
 let msgCounter = 0;
-let loadedBookName = ''; // name of the currently loaded lorebook
+let loadedBookName = '';
 
 // ── Settings & NPC helpers ─────────────────────────────────
 
@@ -66,23 +66,21 @@ function saveNPCs(npcs) {
     ctx.saveMetadata();
 }
 
-// ── Lorebook parsing ──────────────────────────────────────
+// ── Lorebook entry detection ──────────────────────────────
 
 /**
- * Checks if entry is a before_char NPC entry.
- * Two conditions (either is enough):
- *   1. position === 0 or "before_char"
- *   2. keys array contains "character"
+ * Checks if a lorebook entry is an NPC.
+ * Matches if EITHER:
+ *   - position is before_char (0 or "before_char")
+ *   - OR keys contain "character"
  */
 function isNPCEntry(entry) {
-    // Condition 1: position check
     const pos = entry.position
         ?? entry.extensions?.position
         ?? entry.insertion_position
         ?? null;
     const isBeforeChar = pos === 0 || pos === 'before_char';
 
-    // Condition 2: keyword check
     const keys = entry.key || entry.keys || [];
     const keyArray = Array.isArray(keys) ? keys : [keys];
     const hasCharacterKeyword = keyArray.some(k =>
@@ -92,11 +90,7 @@ function isNPCEntry(entry) {
     return isBeforeChar || hasCharacterKeyword;
 }
 
-/**
- * Extracts NPC name and description from a lorebook entry.
- */
 function extractNPCInfo(entry) {
-    // Skip disabled
     if (entry.disable === true || entry.enabled === false) return null;
 
     const name = entry.comment
@@ -113,12 +107,9 @@ function extractNPCInfo(entry) {
 }
 
 /**
- * Parses a lorebook JSON object and returns NPC list.
- * Handles both formats:
- *   - { entries: { "0": {...}, "1": {...} } }
- *   - [ {...}, {...} ]
+ * Extracts NPC list from any lorebook data shape.
  */
-function parseLorebookJSON(data) {
+function parseLorebookData(data) {
     let entries = [];
 
     if (data.entries && typeof data.entries === 'object') {
@@ -126,7 +117,7 @@ function parseLorebookJSON(data) {
     } else if (Array.isArray(data)) {
         entries = data;
     } else {
-        // Try to find entries nested somewhere
+        // Try nested structures
         for (const val of Object.values(data)) {
             if (val && typeof val === 'object' && val.entries) {
                 entries = Object.values(val.entries);
@@ -135,34 +126,135 @@ function parseLorebookJSON(data) {
         }
     }
 
+    console.log(`[WildOffscreen] Checking ${entries.length} lorebook entries…`);
+
     const found = [];
     for (const entry of entries) {
         if (!isNPCEntry(entry)) continue;
         const info = extractNPCInfo(entry);
-        if (info) found.push(info);
+        if (info) {
+            found.push(info);
+            console.log(`[WildOffscreen]   ✓ NPC found: ${info.name} (desc: ${info.description.length} chars)`);
+        }
     }
 
     return found;
 }
 
-/**
- * Loads lorebook from a File object (user picked via file input).
- */
+// ── File-based loading ────────────────────────────────────
+
 async function loadFromFile(file) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => {
-            try {
-                const data = JSON.parse(reader.result);
-                resolve(data);
-            } catch (e) {
-                reject(new Error('Invalid JSON file'));
-            }
+            try { resolve(JSON.parse(reader.result)); }
+            catch (e) { reject(new Error('Invalid JSON file')); }
         };
         reader.onerror = () => reject(new Error('File read error'));
         reader.readAsText(file);
     });
 }
+
+// ── Active lorebook scanning ──────────────────────────────
+
+/**
+ * Attempts to read the currently active lorebook from ST context.
+ * Tries multiple methods for compatibility across ST versions.
+ */
+async function scanActiveLorebook() {
+    const ctx = getContext();
+    let entries = [];
+    let source = '';
+
+    // Method 1: getContext().worldInfo (some ST versions)
+    const wi = ctx.worldInfo || ctx.world_info;
+    if (wi) {
+        if (wi.entries && typeof wi.entries === 'object') {
+            entries = Object.values(wi.entries);
+            source = 'context.worldInfo.entries';
+        } else if (Array.isArray(wi)) {
+            entries = wi;
+            source = 'context.worldInfo (array)';
+        }
+    }
+
+    // Method 2: window globals
+    if (entries.length === 0 && window.world_info) {
+        if (Array.isArray(window.world_info)) {
+            entries = window.world_info;
+            source = 'window.world_info (array)';
+        } else if (typeof window.world_info === 'object') {
+            entries = Object.values(window.world_info);
+            source = 'window.world_info (object)';
+        }
+    }
+
+    // Method 3: character's attached world info book
+    if (entries.length === 0) {
+        const charWorld = ctx.characters?.[ctx.characterId]?.data?.extensions?.world;
+        if (charWorld) {
+            console.log(`[WildOffscreen] Found character world: "${charWorld}", attempting API fetch…`);
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+                // Try to get csrf/auth headers if available
+                if (typeof window.getRequestHeaders === 'function') {
+                    Object.assign(headers, window.getRequestHeaders());
+                }
+                const r = await fetch('/api/worldinfo/get', {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({ name: charWorld }),
+                });
+                if (r.ok) {
+                    const data = await r.json();
+                    if (data?.entries) {
+                        entries = Object.values(data.entries);
+                        source = `API: ${charWorld}`;
+                    }
+                }
+            } catch (e) {
+                console.warn('[WildOffscreen] API fetch failed:', e.message);
+            }
+        }
+    }
+
+    // Method 4: try importing world-info module directly
+    if (entries.length === 0) {
+        try {
+            const wiModule = await import('../../../../world-info.js').catch(() => null);
+            if (wiModule?.world_info_data) {
+                const wiData = wiModule.world_info_data;
+                if (Array.isArray(wiData)) {
+                    entries = wiData;
+                    source = 'world-info.js module (array)';
+                } else if (wiData?.entries) {
+                    entries = Object.values(wiData.entries);
+                    source = 'world-info.js module (entries)';
+                }
+            }
+            if (entries.length === 0 && wiModule?.world_info) {
+                const wi2 = wiModule.world_info;
+                if (Array.isArray(wi2)) {
+                    entries = wi2;
+                    source = 'world-info.js world_info (array)';
+                }
+            }
+        } catch (e) {
+            console.warn('[WildOffscreen] world-info.js import failed:', e.message);
+        }
+    }
+
+    console.log(`[WildOffscreen] Scan source: ${source || 'NONE FOUND'}, raw entries: ${entries.length}`);
+
+    // Log all entries for debugging
+    if (entries.length > 0) {
+        console.log('[WildOffscreen] Entry sample:', JSON.stringify(entries[0]).slice(0, 300));
+    }
+
+    return entries;
+}
+
+// ── Register ──────────────────────────────────────────────
 
 function registerNPCs(scanned) {
     const npcs = getNPCs();
@@ -362,7 +454,7 @@ function renderNPCList() {
 
     const keys = Object.keys(npcs);
     if (keys.length === 0) {
-        container.append('<div class="wo_empty">No NPCs registered. Load a lorebook below.</div>');
+        container.append('<div class="wo_empty">No NPCs registered. Scan or load a lorebook.</div>');
         return;
     }
 
@@ -454,12 +546,15 @@ function buildUI() {
             <!-- NPC list -->
             <div id="wo_npc_list" class="wo_npc_list"></div>
 
-            <!-- Lorebook loading -->
+            <!-- Lorebook -->
             <div class="wo_section_label">Lorebook</div>
-            <div id="wo_book_info" class="wo_book_info">No lorebook loaded</div>
+            <div id="wo_book_info" class="wo_book_info">No lorebook scanned</div>
             <div class="wo_actions">
-                <label class="menu_button wo_file_btn" for="wo_file_input">📂 Load Lorebook</label>
+                <input type="button" id="wo_scan_active" class="menu_button" value="🔍 Scan Active" />
+                <label class="menu_button wo_file_btn" for="wo_file_input">📂 Load JSON</label>
                 <input type="file" id="wo_file_input" accept=".json" style="display:none;" />
+            </div>
+            <div class="wo_actions">
                 <input type="button" id="wo_generate_now" class="menu_button" value="⚡ Generate Now" />
             </div>
 
@@ -535,19 +630,57 @@ jQuery(async () => {
         saveSettingsDebounced();
     });
 
-    // ── File picker — load lorebook JSON ──
+    // ── Scan active lorebook ──
+    $('#wo_scan_active').on('click', async () => {
+        $('#wo_status').text('Scanning active lorebook…').show();
+
+        try {
+            const entries = await scanActiveLorebook();
+
+            if (entries.length === 0) {
+                toastr.warning('Could not access active lorebook. Try "Load JSON" instead.\nCheck browser console (F12) for details.');
+                $('#wo_status').hide();
+                return;
+            }
+
+            const npcs = [];
+            for (const entry of entries) {
+                if (!isNPCEntry(entry)) continue;
+                const info = extractNPCInfo(entry);
+                if (info) npcs.push(info);
+            }
+
+            if (npcs.length === 0) {
+                toastr.warning(`Found ${entries.length} entries, but none matched NPC filters (before_char or "character" keyword).`);
+                $('#wo_status').hide();
+                return;
+            }
+
+            const added = registerNPCs(npcs);
+            renderNPCList();
+            updateInjection();
+
+            $('#wo_book_info').text(`🔍 Active lorebook — ${npcs.length} NPCs found`);
+            toastr.success(`Scan complete: ${npcs.length} NPCs found, ${added} newly added.`);
+        } catch (e) {
+            toastr.error('Scan failed: ' + e.message);
+            console.error('[WildOffscreen] Scan error:', e);
+        }
+
+        $('#wo_status').hide();
+    });
+
+    // ── Load lorebook JSON ──
     $('#wo_file_input').on('change', async function () {
         const file = this.files?.[0];
         if (!file) return;
 
         try {
             const data = await loadFromFile(file);
-            const npcs = parseLorebookJSON(data);
+            const npcs = parseLorebookData(data);
 
             if (npcs.length === 0) {
-                toastr.warning('No NPC entries found. Make sure entries have position "before_char" or keyword "character" in keys.');
-                console.warn('[WildOffscreen] Parsed lorebook but found 0 matching entries. Total entries checked:', 
-                    data.entries ? Object.keys(data.entries).length : 'unknown');
+                toastr.warning('No NPC entries found. Entries need position "before_char" or keyword "character".');
                 return;
             }
 
@@ -556,14 +689,12 @@ jQuery(async () => {
             renderNPCList();
             updateInjection();
 
-            $('#wo_book_info').text(`📖 ${loadedBookName} — ${npcs.length} NPCs found`);
+            $('#wo_book_info').text(`📂 ${loadedBookName} — ${npcs.length} NPCs`);
             toastr.success(`Loaded: ${npcs.length} NPCs found, ${added} newly added.`);
         } catch (e) {
-            toastr.error(`Failed to load lorebook: ${e.message}`);
-            console.error('[WildOffscreen] Load error:', e);
+            toastr.error(`Load failed: ${e.message}`);
         }
 
-        // Reset file input so same file can be re-selected
         this.value = '';
     });
 
