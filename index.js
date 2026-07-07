@@ -331,11 +331,36 @@ async function loadFromFile(file) {
 
 function parseLorebookJSON(data) {
     let entries = [];
-    if (data.entries && typeof data.entries === 'object') entries = Object.values(data.entries);
-    else if (Array.isArray(data)) entries = data;
-    else { for (const val of Object.values(data)) { if (val?.entries) { entries = Object.values(val.entries); break; } } }
+
+    // Format: { entries: { "0": {...}, "1": {...} } } — standard ST lorebook export
+    if (data && data.entries && typeof data.entries === 'object' && !Array.isArray(data.entries)) {
+        entries = Object.values(data.entries);
+    }
+    // Format: { entries: [...] } — array
+    else if (data && Array.isArray(data.entries)) {
+        entries = data.entries;
+    }
+    // Format: [...] — bare array
+    else if (Array.isArray(data)) {
+        entries = data;
+    }
+    // Format: nested { bookName: { entries: {...} } }
+    else if (data && typeof data === 'object') {
+        for (const val of Object.values(data)) {
+            if (val && val.entries) {
+                entries = Array.isArray(val.entries)
+                    ? val.entries
+                    : Object.values(val.entries);
+                break;
+            }
+        }
+    }
+
+    console.log('[WildOffscreen] parseLorebookJSON: found', entries.length, 'raw entries');
+
     const found = [];
     for (const e of entries) {
+        if (!e || typeof e !== 'object') continue;
         if (!isNPCEntry(e)) continue;
         const info = extractNPCInfo(e);
         if (info) found.push(info);
