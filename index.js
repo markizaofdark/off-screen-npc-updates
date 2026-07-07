@@ -54,15 +54,34 @@ function getSettings() {
 }
 
 // ── NPC storage ────────────────────────────────────────────
+// Per-bot storage in extension_settings (persists across chats of same bot)
+// Key: bot avatar filename or bot name
+
+function getBotKey() {
+    try {
+        const ctx = SillyTavern.getContext();
+        // Use avatar filename as stable bot identifier
+        const char = ctx.characters?.[ctx.characterId];
+        return char?.avatar?.replace(/\.[^.]+$/, '') || char?.name || 'unknown';
+    } catch (e) {
+        return 'unknown';
+    }
+}
 
 function getNPCs() {
-    if (!chat_metadata.wild_offscreen_npcs) chat_metadata.wild_offscreen_npcs = {};
-    return chat_metadata.wild_offscreen_npcs;
+    const s = getSettings();
+    const key = getBotKey();
+    if (!s.npcData) s.npcData = {};
+    if (!s.npcData[key]) s.npcData[key] = {};
+    return s.npcData[key];
 }
 
 async function saveNPCs(npcs) {
-    chat_metadata.wild_offscreen_npcs = npcs;
-    await saveMetadataDebounced();
+    const s = getSettings();
+    const key = getBotKey();
+    if (!s.npcData) s.npcData = {};
+    s.npcData[key] = npcs;
+    saveSettingsDebounced();
 }
 
 // ── NPC entry detection ────────────────────────────────────
@@ -385,17 +404,31 @@ Output only the two sentences. [/INST]`;
 
 async function callHF(prompt) {
     const s = getSettings();
-    if (!s.hfToken) return null;
+    if (!s.hfToken) { console.warn('[WildOffscreen] No HF token'); return null; }
     try {
         const r = await fetch(`https://api-inference.huggingface.co/models/${s.hfModel}`, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${s.hfToken}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ inputs: prompt, parameters: { max_new_tokens: 80, temperature: 0.85, do_sample: true, return_full_text: false } }),
         });
-        if (!r.ok) { if (r.status === 503) console.warn('[WildOffscreen] HF model cold-starting'); return null; }
-        const data = await r.json();
-        return (Array.isArray(data) ? data[0]?.generated_text : data?.generated_text)?.trim() || null;
-    } catch (e) { console.error('[WildOffscreen] HF error:', e); return null; }
+
+        const text = await r.text();
+        console.log('[WildOffscreen] HF response status:', r.status, '| body:', text.slice(0, 200));
+
+        if (!r.ok) {
+            if (r.status === 503) console.warn('[WildOffscreen] HF model cold-starting (503) — wait 30s and retry');
+            else console.error('[WildOffscreen] HF error:', r.status, text.slice(0, 200));
+            return null;
+        }
+
+        const data = JSON.parse(text);
+        const result = (Array.isArray(data) ? data[0]?.generated_text : data?.generated_text)?.trim() || null;
+        console.log('[WildOffscreen] HF generated:', result?.slice(0, 100));
+        return result;
+    } catch (e) {
+        console.error('[WildOffscreen] HF fetch error:', e);
+        return null;
+    }
 }
 
 async function generateEventForNPC(npc) {
@@ -415,17 +448,30 @@ async function runGenerationCycle() {
     if (!keys.length) return;
 
     $('#wo_status').text('Generating offscreen events…').show();
+    let generated = 0;
+    let failed = 0;
+
     for (const key of keys) {
         const npc = npcs[key];
         const event = await generateEventForNPC(npc);
-        if (!event) continue;
+        if (!event) { failed++; continue; }
         npc.events.push(event);
         if (npc.events.length > s.maxEvents) npc.events = npc.events.slice(-s.maxEvents);
+        generated++;
     }
+
     await saveNPCs(npcs);
     updateInjection();
     renderNPCList();
     $('#wo_status').text('').hide();
+
+    if (generated === 0 && failed > 0) {
+        toastr.error('HuggingFace returned no results. Model may be loading (wait 30s and retry) or token is invalid.');
+    } else if (failed > 0) {
+        toastr.warning(`Generated ${generated} events, ${failed} failed (model may be cold-starting).`);
+    } else {
+        toastr.success(`Generated ${generated} offscreen events.`);
+    }
 }
 
 // ── Injection ──────────────────────────────────────────────
@@ -670,9 +716,14 @@ jQuery(async () => {
 
     eventSource.on(event_types.GENERATION_STARTED, onGenerationStarted);
     eventSource.on(event_types.CHAT_CHANGED, () => {
-        msgCounter = 0; renderNPCList(); updateInjection();
-        $('#wo_debug_out').hide().empty();
-        $('#wo_book_info').text('—');
+        msgCounter = 0;
+        // Small delay to let ST update characterId first
+        setTimeout(() => {
+            renderNPCList();
+            updateInjection();
+            $('#wo_debug_out').hide().empty();
+            $('#wo_book_info').text(`Bot: ${getBotKey()}`);
+        }, 200);
     });
 
     updateInjection();
