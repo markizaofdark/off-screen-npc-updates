@@ -1,0 +1,123 @@
+/* Wild Offscreen — Styles */
+
+#wo_panel .inline-drawer-content {
+    padding: 8px 0;
+}
+
+/* Status */
+.wo_status {
+    font-size: 0.85em;
+    opacity: 0.7;
+    padding: 4px 0;
+    font-style: italic;
+}
+
+/* NPC list */
+.wo_npc_list {
+    margin: 8px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 320px;
+    overflow-y: auto;
+}
+
+.wo_empty {
+    font-size: 0.85em;
+    opacity: 0.5;
+    padding: 8px 0;
+    text-align: center;
+}
+
+/* NPC card */
+.wo_npc_card {
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor) 15%, transparent);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.wo_npc_card.wo_npc_disabled {
+    opacity: 0.45;
+}
+
+.wo_npc_header {
+    display: flex;
+    align-items: center;
+    padding: 5px 8px;
+    cursor: pointer;
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 5%, transparent);
+    gap: 6px;
+    user-select: none;
+}
+
+.wo_npc_header:hover {
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 10%, transparent);
+}
+
+.wo_npc_name {
+    flex: 1;
+    font-weight: 600;
+    font-size: 0.92em;
+}
+
+.wo_npc_count {
+    font-size: 0.78em;
+    opacity: 0.55;
+}
+
+.wo_npc_actions {
+    display: flex;
+    gap: 2px;
+}
+
+.wo_npc_actions .menu_button {
+    padding: 1px 5px;
+    font-size: 0.8em;
+    min-width: unset;
+    height: unset;
+    line-height: 1.4;
+}
+
+/* Events area */
+.wo_npc_events {
+    padding: 6px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    border-top: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor) 10%, transparent);
+}
+
+.wo_no_events {
+    font-size: 0.82em;
+    opacity: 0.45;
+    font-style: italic;
+}
+
+.wo_event {
+    font-size: 0.85em;
+}
+
+.wo_event_meta {
+    font-size: 0.78em;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    display: block;
+    margin-bottom: 1px;
+}
+
+.wo_event_text {
+    opacity: 0.85;
+    line-height: 1.4;
+}
+
+/* Actions row */
+.wo_actions {
+    display: flex;
+    gap: 6px;
+    margin: 6px 0;
+}
+
+.wo_actions .menu_button {
+    flex: 1;
+    font-size: 0.85em;
+}

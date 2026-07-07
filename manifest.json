@@ -1,0 +1,11 @@
+{
+    "display_name": "Wild Offscreen",
+    "loading_order": 101,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "WildTourists",
+    "version": "1.0.0",
+    "auto_update": false
+}
