@@ -78,88 +78,113 @@ function saveNPCs(npcs) {
 function getAvailableLorebooks() {
     const names = new Set();
 
-    // ST < 1.12: window.world_info is an object keyed by lorebook name
-    if (window.world_info && typeof window.world_info === 'object') {
-        for (const k of Object.keys(window.world_info)) names.add(k);
-    }
-
-    // ST >= 1.12 exposes a global worldInfoData map
-    if (window.worldInfoData && typeof window.worldInfoData === 'object') {
-        for (const k of Object.keys(window.worldInfoData)) names.add(k);
-    }
-
-    // globalThis.world_names is populated by ST's world info module
+    // Primary source: ST's world_names array — these are the actual file/display names
     if (Array.isArray(window.world_names)) {
-        for (const n of window.world_names) names.add(n);
+        for (const n of window.world_names) if (n) names.add(n);
     }
 
-    // SillyTavern also keeps a loaded_world_info list
+    // ST >= 1.12 worldInfoData is keyed by name
+    if (window.worldInfoData && typeof window.worldInfoData === 'object') {
+        for (const k of Object.keys(window.worldInfoData)) {
+            // Skip numeric-only keys (those are entry IDs, not book names)
+            if (!/^\d+$/.test(k)) names.add(k);
+        }
+    }
+
+    // loaded_world_info may be an array of name strings
     if (Array.isArray(window.loaded_world_info)) {
-        for (const n of window.loaded_world_info) names.add(n);
+        for (const n of window.loaded_world_info) if (n && typeof n === 'string') names.add(n);
+    }
+
+    // window.world_info is usually { [index]: data } — keys are numbers, skip for names
+    // but if somehow a version uses string keys, grab them
+    if (window.world_info && typeof window.world_info === 'object' && !Array.isArray(window.world_info)) {
+        for (const k of Object.keys(window.world_info)) {
+            if (!/^\d+$/.test(k)) names.add(k);
+        }
     }
 
     return [...names].sort();
 }
 
 /**
- * Extracts entries array from a lorebook data object
- * regardless of which ST version shaped it.
+ * Extracts entries array from a lorebook data object.
+ * Handles: array, {entries:{...}}, numeric-keyed object {0:{...},1:{...}}.
  */
 function extractEntries(lorebookData) {
     if (!lorebookData) return [];
     if (Array.isArray(lorebookData)) return lorebookData;
-    if (lorebookData.entries) return Object.values(lorebookData.entries);
-    // Some versions wrap in a second level
-    const first = Object.values(lorebookData)[0];
+    // Named entries object: { entries: { 0: {...}, 1: {...} } }
+    if (lorebookData.entries && typeof lorebookData.entries === 'object') {
+        return Object.values(lorebookData.entries);
+    }
+    // Flat numeric-keyed object: { 0: {...}, 1: {...} }
+    const vals = Object.values(lorebookData);
+    if (vals.length && vals[0] && typeof vals[0] === 'object' && ('content' in vals[0] || 'key' in vals[0])) {
+        return vals;
+    }
+    // One more level deep (some ST versions wrap everything)
+    const first = vals[0];
     if (first && first.entries) return Object.values(first.entries);
     return [];
 }
 
 /**
- * Scans a specific lorebook (by name) for before_char entries.
- * Falls back to scanning all active world info if no name given.
- * Position 0 or "before_char" = NPC entry.
+ * Scans a specific lorebook (by name) for NPC entries.
+ * Match criteria (OR logic):
+ *   1. position === before_char (0 or 'before_char')
+ *   2. any key contains the word "character" (case-insensitive)
  */
 function scanLorebook(lorebookName) {
-    const found = [];
-
     // --- Resolve raw entries ---
     let rawEntries = [];
 
     if (lorebookName) {
-        // Try all known ST storage locations by name
-        const sources = [
-            window.world_info?.[lorebookName],
-            window.worldInfoData?.[lorebookName],
-        ];
-        for (const src of sources) {
-            if (src) {
-                rawEntries = extractEntries(src);
-                if (rawEntries.length) break;
+        // world_names[i] => world_info[i] mapping (most common ST layout)
+        if (Array.isArray(window.world_names) && window.world_info) {
+            const idx = window.world_names.indexOf(lorebookName);
+            if (idx !== -1 && window.world_info[idx]) {
+                rawEntries = extractEntries(window.world_info[idx]);
             }
+        }
+        // Fallback: worldInfoData keyed by name
+        if (rawEntries.length === 0 && window.worldInfoData?.[lorebookName]) {
+            rawEntries = extractEntries(window.worldInfoData[lorebookName]);
+        }
+        // Fallback: world_info keyed by name directly
+        if (rawEntries.length === 0 && window.world_info?.[lorebookName]) {
+            rawEntries = extractEntries(window.world_info[lorebookName]);
         }
     }
 
-    // Fallback: use context worldInfo (active lorebook attached to chat/char)
+    // Last resort: active lorebook from context
     if (rawEntries.length === 0) {
         const ctx = getContext();
         const wi = ctx.worldInfo || ctx.world_info || {};
         rawEntries = extractEntries(wi);
     }
 
-    // --- Filter for before_char ---
+    // --- Filter: before_char OR keyword contains "character" ---
+    const found = [];
     for (const entry of rawEntries) {
-        const pos = entry.position ?? entry.extensions?.position ?? entry.insertion_position;
-        const isBeforeChar = pos === 0 || pos === 'before_char';
-        if (!isBeforeChar) continue;
         if (entry.disable === true || entry.enabled === false) continue;
 
-        const name = entry.comment || entry.name || entry.key?.[0] || null;
+        const pos = entry.position ?? entry.extensions?.position ?? entry.insertion_position;
+        const isBeforeChar = pos === 0 || pos === 'before_char';
+
+        // Keys can be an array of strings
+        const keys = Array.isArray(entry.key) ? entry.key : (entry.key ? [entry.key] : []);
+        const hasCharacterKey = keys.some(k => /character/i.test(k));
+
+        if (!isBeforeChar && !hasCharacterKey) continue;
+
+        const name = entry.comment || entry.name || keys[0] || null;
         if (!name) continue;
 
         found.push({
             name,
             description: entry.content || '',
+            matchReason: isBeforeChar ? 'before_char' : 'keyword:character',
         });
     }
 
@@ -649,7 +674,10 @@ jQuery(async () => {
         const added = registerNPCs(scanned);
         renderNPCList();
         updateInjection();
-        toastr.success(`Scan complete: ${scanned.length} found, ${added} newly registered.`);
+        const byPos = scanned.filter(e => e.matchReason === 'before_char').length;
+        const byKey = scanned.filter(e => e.matchReason !== 'before_char').length;
+        const detail = [byPos && `${byPos} by position`, byKey && `${byKey} by keyword`].filter(Boolean).join(', ');
+        toastr.success(`Scan complete: ${scanned.length} found (${detail}), ${added} newly registered.`);
     });
 
     // ── Generate now button ──
