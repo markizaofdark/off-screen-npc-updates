@@ -402,33 +402,51 @@ English only. No dialogue. No meta.
 Output only the two sentences. [/INST]`;
 }
 
+/**
+ * Call the main ST API (whatever is currently connected) via generateRaw.
+ * Falls back to HuggingFace if main API fails and HF token is set.
+ */
+async function callMainAPI(messages) {
+    try {
+        const ctx = SillyTavern.getContext();
+        if (typeof ctx.generateRaw !== 'function') {
+            console.warn('[WildOffscreen] generateRaw not available in this ST version');
+            return null;
+        }
+        // Try object-style first (newer ST), then flat string (older ST)
+        let result;
+        try {
+            result = await ctx.generateRaw({ prompt: messages });
+        } catch (e) {
+            console.warn('[WildOffscreen] generateRaw object style failed, trying flat:', e.message);
+            const flat = messages.map(m => `[${(m.role || 'system').toUpperCase()}]
+${m.content || ''}`).join('
+
+');
+            result = await ctx.generateRaw(flat, null, false, false);
+        }
+        console.log('[WildOffscreen] generateRaw result:', String(result || '').slice(0, 150));
+        return typeof result === 'string' ? result.trim() : null;
+    } catch (e) {
+        console.error('[WildOffscreen] generateRaw error:', e);
+        return null;
+    }
+}
+
 async function callHF(prompt) {
     const s = getSettings();
-    if (!s.hfToken) { console.warn('[WildOffscreen] No HF token'); return null; }
+    if (!s.hfToken) return null;
     try {
         const r = await fetch(`https://api-inference.huggingface.co/models/${s.hfModel}`, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${s.hfToken}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ inputs: prompt, parameters: { max_new_tokens: 80, temperature: 0.85, do_sample: true, return_full_text: false } }),
         });
-
         const text = await r.text();
-        console.log('[WildOffscreen] HF response status:', r.status, '| body:', text.slice(0, 200));
-
-        if (!r.ok) {
-            if (r.status === 503) console.warn('[WildOffscreen] HF model cold-starting (503) — wait 30s and retry');
-            else console.error('[WildOffscreen] HF error:', r.status, text.slice(0, 200));
-            return null;
-        }
-
+        if (!r.ok) { console.warn('[WildOffscreen] HF', r.status, text.slice(0, 100)); return null; }
         const data = JSON.parse(text);
-        const result = (Array.isArray(data) ? data[0]?.generated_text : data?.generated_text)?.trim() || null;
-        console.log('[WildOffscreen] HF generated:', result?.slice(0, 100));
-        return result;
-    } catch (e) {
-        console.error('[WildOffscreen] HF fetch error:', e);
-        return null;
-    }
+        return (Array.isArray(data) ? data[0]?.generated_text : data?.generated_text)?.trim() || null;
+    } catch (e) { console.error('[WildOffscreen] HF error:', e); return null; }
 }
 
 async function generateEventForNPC(npc) {
