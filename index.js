@@ -163,11 +163,33 @@ async function debugFirstEntries() {
         return { error: 'No lorebooks found for current character. Attach a lorebook to this character card first.', bookNames: [] };
     }
     const firstBook = bookNames[0];
-    const entries = await fetchBookEntries(firstBook);
+
+    // Raw API response for debugging
+    let rawResponse = null;
+    let rawKeys = [];
+    let entries = [];
+    try {
+        const r = await fetch('/api/worldinfo/get', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: firstBook }),
+        });
+        const text = await r.text();
+        rawResponse = text.slice(0, 300); // first 300 chars
+        const data = JSON.parse(text);
+        rawKeys = Object.keys(data || {});
+        if (data?.entries) entries = Object.values(data.entries);
+        else if (Array.isArray(data)) entries = data;
+    } catch(e) {
+        return { error: 'API fetch failed: ' + e.message, bookNames, activeBook: firstBook };
+    }
+
     return {
         bookNames,
         activeBook: firstBook,
         totalEntries: entries.length,
+        rawKeys,
+        rawPreview: rawResponse,
         sample: entries.slice(0, 5).map(e => ({
             name: e.comment || e.name || e.key?.[0] || '—',
             position: e.position ?? e.extensions?.position ?? e.insertion_position ?? 'MISSING',
@@ -494,14 +516,23 @@ jQuery(async () => {
             const info = await debugFirstEntries();
             out.empty();
             if (info.error) { out.append(`<div class="wo_debug_row" style="color:#ef5350;">❌ ${info.error}</div>`); return; }
-            out.append(`<div class="wo_debug_title">Books: <code>${info.bookNames.join(', ') || 'none'}</code></div>`);
-            out.append(`<div class="wo_debug_title">Active: <code>${info.activeBook}</code> — ${info.totalEntries} entries</div>`);
-            for (const e of info.sample) {
-                out.append(`<div class="wo_debug_entry">
-                    <b>${e.name}</b>${e.disabled ? ' <span style="color:#ef5350">[disabled]</span>' : ''}<br>
-                    position: <code>${JSON.stringify(e.position)}</code><br>
-                    keys: <code>${e.keys.join(', ') || '(none)'}</code>
-                </div>`);
+            out.append(`<div class="wo_debug_title">Books found: <code>${info.bookNames.join(', ') || 'none'}</code></div>`);
+            out.append(`<div class="wo_debug_title">Active book: <code>${info.activeBook}</code></div>`);
+            out.append(`<div class="wo_debug_title">API response top-level keys: <code>${(info.rawKeys || []).join(', ') || '(empty)'}</code></div>`);
+            out.append(`<div class="wo_debug_title">Entries found: <b>${info.totalEntries}</b></div>`);
+            if (info.rawPreview) {
+                out.append(`<div class="wo_debug_title">Raw response preview:</div>`);
+                out.append(`<div class="wo_debug_entry"><code style="word-break:break-all;font-size:0.8em;">${info.rawPreview}</code></div>`);
+            }
+            if (info.sample?.length) {
+                out.append(`<div class="wo_debug_title">First entries:</div>`);
+                for (const e of info.sample) {
+                    out.append(`<div class="wo_debug_entry">
+                        <b>${e.name}</b>${e.disabled ? ' <span style="color:#ef5350">[disabled]</span>' : ''}<br>
+                        position: <code>${JSON.stringify(e.position)}</code><br>
+                        keys: <code>${e.keys.join(', ') || '(none)'}</code>
+                    </div>`);
+                }
             }
         } catch (err) { out.empty().append(`<div class="wo_debug_row" style="color:#ef5350;">Error: ${err.message}</div>`); }
     });
