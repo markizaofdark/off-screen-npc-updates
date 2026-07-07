@@ -149,7 +149,21 @@ async function fetchBookEntries(bookName) {
         }
     }
 
-    console.warn('[WildOffscreen] All endpoints failed for book:', bookName);
+    // API failed — try window.world_info directly
+    console.warn('[WildOffscreen] All API endpoints failed, trying window.world_info for:', bookName);
+    const globalWI = window.world_info || window.worldInfo;
+    if (!globalWI) return [];
+
+    // Structure A: { bookName: { entries: {...} } }
+    if (globalWI[bookName]?.entries) return Object.values(globalWI[bookName].entries);
+    if (Array.isArray(globalWI[bookName])) return globalWI[bookName];
+
+    // Structure B: flat { entries: {...} }
+    if (globalWI.entries) return Object.values(globalWI.entries);
+
+    // Structure C: array
+    if (Array.isArray(globalWI)) return globalWI;
+
     return [];
 }
 
@@ -213,17 +227,50 @@ async function debugFirstEntries() {
     }
 
     if (!workingEndpoint && entries.length === 0) {
-        // Last resort: try window globals directly
         const globalWI = window.world_info || window.worldInfo;
         if (globalWI) {
-            rawResponse += ' | Trying window.world_info...';
-            const allEntries = globalWI.entries
-                ? Object.values(globalWI.entries)
-                : Array.isArray(globalWI) ? globalWI : [];
-            // Filter to entries that might belong to our book
-            entries = allEntries;
-            rawKeys = ['window.world_info (global)'];
-            workingEndpoint = 'window.world_info';
+            rawResponse += ' | Inspecting window.world_info structure...';
+            // Log full structure for debugging
+            const topKeys = Object.keys(globalWI).slice(0, 10);
+            rawResponse += ` | top keys: [${topKeys.join(', ')}]`;
+
+            // Structure A: { bookName: { entries: {...} } }
+            if (globalWI[firstBook]) {
+                const book = globalWI[firstBook];
+                rawResponse += ` | found key ${firstBook}`;
+                if (book.entries) {
+                    entries = Object.values(book.entries);
+                    rawResponse += ` | entries: ${entries.length}`;
+                } else if (Array.isArray(book)) {
+                    entries = book;
+                    rawResponse += ` | array entries: ${entries.length}`;
+                } else {
+                    rawResponse += ` | unknown book shape: ${Object.keys(book).slice(0,5).join(', ')}`;
+                }
+                workingEndpoint = 'window.world_info[bookName]';
+
+            // Structure B: { entries: { uid: entry } } — flat, all books merged
+            } else if (globalWI.entries) {
+                const all = Object.values(globalWI.entries);
+                rawResponse += ` | flat entries total: ${all.length}`;
+                entries = all;
+                workingEndpoint = 'window.world_info.entries (flat)';
+
+            // Structure C: array of entries
+            } else if (Array.isArray(globalWI)) {
+                rawResponse += ` | is array, length: ${globalWI.length}`;
+                entries = globalWI;
+                workingEndpoint = 'window.world_info (array)';
+
+            // Structure D: { data: [...] } or nested somewhere
+            } else {
+                // Dump first value's shape to understand structure
+                const firstVal = Object.values(globalWI)[0];
+                rawResponse += ` | first value type: ${typeof firstVal}, keys: ${firstVal ? Object.keys(firstVal).slice(0,5).join(',') : 'null'}`;
+                rawKeys = ['window.world_info (unknown shape — see raw preview)'];
+            }
+        } else {
+            rawResponse += ' | window.world_info not found';
         }
     }
 
