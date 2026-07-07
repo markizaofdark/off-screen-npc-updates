@@ -14,6 +14,7 @@ import {
     chat_metadata,
     characters,
     this_chid,
+    getRequestHeaders,
 } from '../../../../script.js';
 import { world_info } from '../../../world-info.js';
 
@@ -126,22 +127,25 @@ function getCharacterLorebookNames() {
 async function fetchBookEntries(bookName) {
     if (!bookName) return [];
 
+    // Use getRequestHeaders() which includes the CSRF token ST requires
+    const baseHeaders = getRequestHeaders();
+
     const endpoints = [
         { url: '/api/worldinfo/get', method: 'POST', body: { name: bookName } },
         { url: '/api/worldinfo/getone', method: 'POST', body: { name: bookName } },
         { url: `/api/worldinfo/${encodeURIComponent(bookName)}`, method: 'GET', body: null },
-        { url: '/api/world_info/get', method: 'POST', body: { name: bookName } },
     ];
 
     for (const ep of endpoints) {
         try {
-            const opts = { method: ep.method, headers: { 'Content-Type': 'application/json' } };
+            const opts = { method: ep.method, headers: { ...baseHeaders, 'Content-Type': 'application/json' } };
             if (ep.body) opts.body = JSON.stringify(ep.body);
             const r = await fetch(ep.url, opts);
-            if (!r.ok) continue;
+            if (!r.ok) { console.warn(`[WildOffscreen] ${ep.url} → ${r.status}`); continue; }
             const text = await r.text();
             if (!text || text.trim().startsWith('<')) continue;
             const data = JSON.parse(text);
+            console.log(`[WildOffscreen] ${ep.url} worked! keys: ${Object.keys(data).join(',')}`);
             if (data?.entries) return Object.values(data.entries);
             if (Array.isArray(data)) return data;
         } catch (e) {
@@ -149,30 +153,7 @@ async function fetchBookEntries(bookName) {
         }
     }
 
-    // API failed — try window.world_info directly
-    console.warn('[WildOffscreen] All API endpoints failed, trying window.world_info for:', bookName);
-    const globalWI = window.world_info || window.worldInfo;
-    if (!globalWI) return [];
-
-    // Structure A: array (keys 0,1,2...)
-    if (Array.isArray(globalWI)) {
-        const firstItem = globalWI[0];
-        if (firstItem && (firstItem.content !== undefined || firstItem.key !== undefined)) {
-            return globalWI; // array of entries directly
-        } else if (firstItem?.entries) {
-            const book = globalWI.find(b => b.name === bookName || b.displayName === bookName);
-            if (book) return Object.values(book.entries);
-            return globalWI.flatMap(b => b.entries ? Object.values(b.entries) : []);
-        }
-        return globalWI;
-    }
-
-    // Structure B: { bookName: { entries: {...} } }
-    if (globalWI[bookName]?.entries) return Object.values(globalWI[bookName].entries);
-
-    // Structure C: flat { entries: {...} }
-    if (globalWI.entries) return Object.values(globalWI.entries);
-
+    console.warn('[WildOffscreen] All API endpoints failed for:', bookName);
     return [];
 }
 
@@ -226,16 +207,16 @@ async function debugFirstEntries() {
     let entries = [];
     let workingEndpoint = null;
 
+    const baseHeaders = getRequestHeaders();
     const endpoints = [
         { url: '/api/worldinfo/get', method: 'POST', body: { name: firstBook } },
         { url: '/api/worldinfo/getone', method: 'POST', body: { name: firstBook } },
         { url: `/api/worldinfo/${encodeURIComponent(firstBook)}`, method: 'GET', body: null },
-        { url: '/api/world_info/get', method: 'POST', body: { name: firstBook } },
     ];
 
     for (const ep of endpoints) {
         try {
-            const opts = { method: ep.method, headers: { 'Content-Type': 'application/json' } };
+            const opts = { method: ep.method, headers: { ...baseHeaders, 'Content-Type': 'application/json' } };
             if (ep.body) opts.body = JSON.stringify(ep.body);
             const r = await fetch(ep.url, opts);
             const text = await r.text();
