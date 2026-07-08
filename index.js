@@ -327,21 +327,22 @@ function buildMessages(npc, scale, category, isPositive) {
     return [
         {
             role: 'system',
-            content: 'You are a narrator generating brief offscreen story events for roleplay characters. Output ONLY the event text — no labels, no meta, no commentary.',
+            content: 'You write brief narrative descriptions of offscreen events happening to characters in a story. '
+                + 'Write ONLY the event itself as plain prose — no labels, no character name prefix, no meta-commentary. '
+                + 'Do not start with the character name. Do not use bullet points or lists.',
         },
         {
             role: 'user',
-            content: 'Generate ONE offscreen event for this character.\n\n'
-                + 'CHARACTER: ' + npc.name + '\n'
-                + 'DESCRIPTION: ' + npc.description.slice(0, 500) + '\n\n'
-                + 'RECENT EVENTS (do NOT repeat):\n' + history + '\n\n'
-                + 'Requirements:\n'
-                + '- Scale: ' + scale.label + '\n'
-                + '- Category: ' + category + '\n'
-                + '- Impact: ' + (isPositive ? 'positive' : 'negative') + ' for ' + npc.name + '\n'
-                + '- Exactly two sentences: what happened, then the immediate consequence\n'
-                + '- English only. No dialogue. No meta-commentary.\n\n'
-                + 'Output only the two sentences:',
+            content: 'Write a brief offscreen event for ' + npc.name + '.\n\n'
+                + 'Character description: ' + npc.description.slice(0, 500) + '\n\n'
+                + 'Their recent history (do not repeat these):\n' + history + '\n\n'
+                + 'Event requirements:\n'
+                + '- Narrative scale: ' + scale.label + '\n'
+                + '- Event category: ' + category + '\n'
+                + '- Overall impact: ' + (isPositive ? 'positive' : 'negative') + '\n\n'
+                + 'Write exactly two sentences in plain English. '
+                + 'First sentence: what happened. Second sentence: the immediate consequence. '
+                + 'Do not start with the character name.',
         },
     ];
 }
@@ -353,8 +354,21 @@ async function generateEventForNPC(npc) {
     const isPositive = roll % 2 === 0;
     const messages = buildMessages(npc, scale, category, isPositive);
     let text = await callAPI(messages);
+    console.log('[WildOffscreen] Raw generated text for', npc.name, ':', JSON.stringify(text));
     if (!text) return null;
-    text = text.replace(/^(event|result|output|here|two sentences)[:\s]*/i, '').trim();
+
+    // Only strip obvious meta-prefixes, not anything that could be content
+    text = text
+        .replace(/^```[\s\S]*?```$/m, t => t.replace(/^```\w*\n?/, '').replace(/\n?```$/, ''))
+        .replace(/^(two sentences|output|event text|result)[:\s]+/i, '')
+        .trim();
+
+    // If result is suspiciously short (just a name), log and skip
+    if (text.length < 20) {
+        console.warn('[WildOffscreen] Generated text too short for', npc.name, '- raw was:', JSON.stringify(text));
+        return null;
+    }
+
     return { text, scale: scale.id, category, positive: isPositive, timestamp: Date.now() };
 }
 
