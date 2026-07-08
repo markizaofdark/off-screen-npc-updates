@@ -240,7 +240,7 @@ function getDefaultProfileName() {
         || '';
 }
 
-async function callAPI(messages) {
+async function callAPI(messages, npcCount) {
     const s = getSettings();
     const profiles = getConnectionProfiles();
 
@@ -266,7 +266,7 @@ async function callAPI(messages) {
         temperature: 0.95,
         frequency_penalty: 0.2,
         presence_penalty: 0.3,
-        max_tokens: 200,
+        max_tokens: Math.max(400, (npcCount || 4) * 120),
         stream: false,
         chat_completion_source: cc_source,
     };
@@ -581,7 +581,7 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext, sceneInfo)
                     + '  Scale: ' + scaleDesc + '\n'
                     + '  Category: ' + catDesc + '\n'
                     + '  Tone: ' + impact + ' (must feel ' + (params.isPositive ? 'like a gain, relief, or positive turn' : 'like a loss, setback, or negative development') + ')\n'
-                    + '  Roll: ' + params.roll + '/20 — calibrate intensity accordingly.');
+                    + '  Roll: ' + params.roll + '/20 — calibrate intensity accordingly. Do NOT include this metadata in your response.');
     }).join('\n\n');
 
     // Build scene context header from parsed info-block
@@ -613,7 +613,7 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext, sceneInfo)
         + 'Also determine a short location name (1-5 words) for where each OFFSCREEN NPC currently is.\n\n'
         + 'Respond with ONLY this format, one line per NPC:\n'
         + npcList.map((item, i) => 'NPC' + (i + 1) + ': [location] | [event sentence or "No offscreen events. Currently in scene."]').join('\n') + '\n'
-        + 'Example offscreen: NPC1: the marketplace | She haggled bitterly over a bag of spices with an impatient merchant.\n'
+        + 'IMPORTANT: Do NOT add any notes, labels, or metadata after the sentence. No *(Scale:...)*, no explanations, nothing except the format above.\n'        + 'Example offscreen: NPC1: the marketplace | She haggled bitterly over a bag of spices with an impatient merchant.\n'
         + 'Example in-scene: NPC2: Тюменское ГУВД, кабинет Парфёнова | No offscreen events. Currently in scene.';
 
     console.log('[WildOffscreen] Batch prompt for', npcList.length, 'NPCs, userContent length:', userContent.length);
@@ -663,6 +663,10 @@ function parseBatchResponse(text, count) {
             }
         }
 
+        // Strip model-appended metadata like *(Scale: MAJOR / Category: Social / Tone: POSITIVE)*
+        sentence = sentence.replace(/\s*\*\(Scale:[^)]*\)\*/g, '').trim();
+        sentence = sentence.replace(/\s*\[OFFSCREEN\]|\s*\[IN SCENE\]/gi, '').trim();
+
         // Detect "currently in scene" marker — do not treat as a real event
         const inSceneMarker = /no offscreen events|currently in scene/i.test(sentence);
         if (inSceneMarker) {
@@ -708,7 +712,7 @@ async function generateEventsForAllNPCs(npcs) {
 
     const sceneInfo = parseSceneInfo();
     const messages = buildBatchMessages(npcList, mainCharInfo, sharedChat, sceneInfo);
-    const rawText = await callAPI(messages);
+    const rawText = await callAPI(messages, npcList.length);
     console.log('[WildOffscreen] Batch response:', rawText?.slice(0, 500));
 
     if (!rawText) return;
