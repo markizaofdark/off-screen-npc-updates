@@ -253,7 +253,9 @@ async function callAPI(messages) {
     const generate_data = {
         messages,
         model: profile.model || '',
-        temperature: 0.85,
+        temperature: 0.95,
+        frequency_penalty: 0.2,
+        presence_penalty: 0.3,
         max_tokens: 200,
         stream: false,
         chat_completion_source: cc_source,
@@ -496,7 +498,8 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext) {
         {
             role: 'system',
             content: 'You write brief offscreen event summaries for story characters. '
-                + 'Dry, specific, one sentence per character. No names at sentence start. No dialogue.',
+                + 'Dry, specific, one sentence per character. No names at sentence start. No dialogue. '
+                + 'CRITICAL: Absolutely DO NOT repeat the same actions, phrasings, or themes from the RECENT OFFSCREEN EVENTS. Every new event must be completely unique and distinct.',
         },
         { role: 'user', content: userContent },
     ];
@@ -700,28 +703,56 @@ function renderNPCList() {
             <div class="wo_npc_events" style="display:none;"></div>
         </div>`);
         const evContainer = card.find('.wo_npc_events');
+
+
         if (!npc.events.length) {
             evContainer.append('<div class="wo_no_events">No events yet.</div>');
         } else {
             if (npc.lastLocation) {
                 evContainer.append('<div class="wo_npc_location">📍 ' + npc.lastLocation + '</div>');
             }
-            for (const ev of [...npc.events].reverse()) {
+            
+            const reversedEvents = [...npc.events].reverse();
+            for (let i = 0; i < reversedEvents.length; i++) {
+                const ev = reversedEvents[i];
+                // Вычисляем настоящий индекс элемента в исходном массиве
+                const originalIndex = npc.events.length - 1 - i;
+                
                 const color = ev.positive ? '#66bb6a' : '#ef5350';
                 const locTag = ev.location && ev.location !== 'unknown'
                     ? '<span class="wo_event_loc">📍 ' + ev.location + '</span>'
                     : '';
-                // ev.text всегда строка после фикса
                 const evText = typeof ev.text === 'string' ? ev.text : String(ev.text?.text || ev.text || '');
-                evContainer.append('<div class="wo_event">'
-                    + '<span class="wo_event_meta" style="color:' + color + '">'
-                    + (ev.positive ? '▲' : '▼') + ' ' + ev.scale.toUpperCase() + ' · ' + ev.category
-                    + '</span>'
-                    + locTag
-                    + '<div class="wo_event_text">' + evText + '</div>'
-                    + '</div>');
+                
+                const evRow = $(`
+                    <div class="wo_event" style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 6px;">
+                        <div style="flex: 1;">
+                            <span class="wo_event_meta" style="color:${color}">${ev.positive ? '▲' : '▼'} ${ev.scale.toUpperCase()} · ${ev.category}</span>
+                            ${locTag}
+                            <div class="wo_event_text">${evText}</div>
+                        </div>
+                        <button class="wo_btn_delete_event menu_button" data-idx="${originalIndex}" title="Delete this event" style="padding: 0px 4px; font-size: 0.75em; min-width: unset; opacity: 0.5;">✕</button>
+                    </div>
+                `);
+                evContainer.append(evRow);
             }
+
+            // Обработчик удаления
+            evContainer.find('.wo_btn_delete_event').on('click', async function (e) {
+                e.stopPropagation(); // Чтобы карточка не схлопывалась при клике
+                const idx = parseInt($(this).attr('data-idx'));
+                if (isNaN(idx)) return;
+                
+                const n = getNPCs();
+                if (n[key] && n[key].events) {
+                    n[key].events.splice(idx, 1);
+                    await saveNPCs(n);
+                    renderNPCList();
+                    updateInjection();
+                }
+            });
         }
+        
         card.find('.wo_npc_header').on('click', function (e) {
             if ($(e.target).closest('.wo_npc_actions').length) return;
             evContainer.slideToggle(150);
