@@ -322,6 +322,63 @@ function getMainCharInfo() {
     } catch (e) { return ''; }
 }
 
+// ── Scene info parser ─────────────────────────────────────────────────────
+
+/**
+ * Parses the styled info-block from the last message containing a date.
+ * Expected format: "2008/11/12, Поздняя осень • 14:15 • Локация • Персонаж1, Персонаж2"
+ * Returns { raw, date, time, season, location, characters[] } or null.
+ */
+function parseSceneInfo() {
+    try {
+        const ctx = SillyTavern.getContext();
+        const chat = ctx.chat || [];
+        const lastMsg = [...chat].reverse().find(m => m.mes && /\d{4}\/\d{2}\/\d{2}/.test(m.mes));
+        if (!lastMsg) return null;
+
+        let raw = null;
+        // Try styled div first
+        const divMatch = lastMsg.mes.match(/<div[^>]+border-left[^>]*?>([\s\S]*?)<\/div>/i);
+        if (divMatch) {
+            const inner = divMatch[1].replace(/<[^>]+>/g, '').trim();
+            if (/\d{4}\/\d{2}\/\d{2}/.test(inner)) raw = inner;
+        }
+        // Fallback: strip all tags and grab the first line with a date
+        if (!raw) {
+            const stripped = lastMsg.mes.replace(/<[^>]+>/g, '');
+            const lineMatch = stripped.match(/.*\d{4}\/\d{2}\/\d{2}.*/);
+            if (lineMatch) raw = lineMatch[0].trim();
+        }
+        if (!raw) return null;
+
+        // Split on • (bullet U+2022 or literal)
+        const parts = raw.split(/\s*[\u2022•]\s*/);
+        // parts[0] → "2008/11/12, Поздняя осень"
+        // parts[1] → "14:15"
+        // parts[2] → "Тюменское ГУВД, кабинет Парфёнова"
+        // parts[3] → "Савелий Парфёнов, Андрей Кравцов, Лилит"  (may contain main char too)
+
+        const datePart  = (parts[0] || '').trim();
+        const timePart  = (parts[1] || '').trim();
+        const locPart   = (parts[2] || '').trim();
+        const charPart  = (parts[3] || '').trim();
+
+        const dateMatch = datePart.match(/(\d{4}\/\d{2}\/\d{2})/);
+        const date      = dateMatch ? dateMatch[1] : datePart;
+        const season    = datePart.replace(/\d{4}\/\d{2}\/\d{2}[,\s]*/,'').trim();
+
+        // Characters: split by comma, trim, remove empties
+        const characters = charPart
+            ? charPart.split(',').map(s => s.trim()).filter(Boolean)
+            : [];
+
+        return { raw, date, time: timePart, season, location: locPart, characters };
+    } catch(e) {
+        console.warn('[WildOffscreen] parseSceneInfo error:', e.message);
+        return null;
+    }
+}
+
 // ── Search helpers (used for context lookup, NOT for regex gen) ────────────
 
 function parseRegexKey(key) {
@@ -464,7 +521,7 @@ function rollEventParams() {
     return { roll, scale, category, isPositive };
 }
 
-function buildBatchMessages(npcList, mainCharInfo, sharedChatContext) {
+function buildBatchMessages(npcList, mainCharInfo, sharedChatContext, sceneInfo) {
     const s = getSettings();
     const npcBlocks = npcList.map((item, i) => {
         const { npc, params } = item;
@@ -476,28 +533,60 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext) {
         const npcContext = npcContextResult.text;
         const lastLoc = npc.lastLocation ? 'Last known location: ' + npc.lastLocation : '';
 
-        return '--- NPC ' + (i + 1) + ': ' + npc.name + ' ---\n'
+        // Detect if this NPC is currently in the active scene
+        let inScene = false;
+        if (sceneInfo && sceneInfo.characters.length > 0) {
+            const npcNameLower = npc.name.toLowerCase();
+            inScene = sceneInfo.characters.some(c => {
+                const cl = c.toLowerCase();
+                return cl === npcNameLower
+                    || cl.includes(npcNameLower)
+                    || npcNameLower.includes(cl)
+                    || npc.searchKeys.some(k => k && cl.includes(k.toLowerCase()));
+            });
+        }
+
+        return '--- NPC ' + (i + 1) + ': ' + npc.name + (inScene ? ' [IN SCENE]' : ' [OFFSCREEN]') + ' ---\n'
             + 'DESCRIPTION: ' + npc.description.slice(0, 3000) + '\n'
             + (lastLoc ? lastLoc + '\n' : '')
             + 'RECENT OFFSCREEN EVENTS (do not repeat): ' + history + '\n'
             + 'MENTIONS IN STORY (for context): ' + (npcContext || 'none') + '\n'
-            + 'EVENT REQUIREMENTS: ' + impact + ' | ' + scaleDesc + ' | ' + catDesc;
+            + (inScene
+                ? 'STATUS: THIS CHARACTER IS CURRENTLY IN THE ACTIVE SCENE. DO NOT generate offscreen events.'
+                : 'EVENT REQUIREMENTS: ' + impact + ' | ' + scaleDesc + ' | ' + catDesc);
     }).join('\n\n');
 
+    // Build scene context header from parsed info-block
+    let sceneHeader = '';
+    if (sceneInfo) {
+        const inSceneNames = sceneInfo.characters.length
+            ? sceneInfo.characters.join(', ')
+            : 'unknown';
+        sceneHeader = '=== ACTIVE SCENE INFO (from story header) ===\n'
+            + 'Date & time: ' + sceneInfo.date + (sceneInfo.time ? ' • ' + sceneInfo.time : '') + (sceneInfo.season ? ', ' + sceneInfo.season : '') + '\n'
+            + 'Current location: ' + (sceneInfo.location || 'unknown') + '\n'
+            + 'Characters PRESENT in this scene: ' + inSceneNames + '\n'
+            + 'These characters are actively participating in the scene right now and must receive "No offscreen events. Currently in scene." with their current location.\n'
+            + '===\n\n';
+    }
+
     const userContent = (mainCharInfo ? mainCharInfo + '\n\n' : '')
+        + sceneHeader
         + 'CURRENT STORY CONTEXT:\n' + (sharedChatContext || 'none') + '\n\n'
         + npcBlocks + '\n\n'
-        + 'For each NPC above, write exactly ONE sentence (15-25 words) describing what they just did or experienced INDEPENDENTLY, while away from the main scene.\n'
-        + 'These NPCs are NOT in the current scene. Do not place them near each other or near the main character unless the story context explicitly shows them together.\n'
-        + 'Requirements for each sentence:\n'
+        + 'For each NPC above:\n'
+        + '- If marked [IN SCENE]: write exactly: "[current scene location] | No offscreen events. Currently in scene."\n'
+        + '- If marked [OFFSCREEN]: write exactly ONE sentence (15-25 words) describing what they just did or experienced independently, away from the active scene.\n'
+        + 'Requirements for [OFFSCREEN] NPCs:\n'
         + '- Match the event requirements (impact/scale/type) listed for that NPC\n'
         + '- Be specific to their personality and situation\n'
         + '- Do NOT start with their name\n'
         + '- No dialogue, no poetic language\n\n'
-        + 'Also determine a short location name (1-5 words) for where this NPC currently is.\n\n'
+        + 'Also determine a short location name (1-5 words) for where each OFFSCREEN NPC currently is.\n\n'
         + 'Respond with ONLY this format, one line per NPC:\n'
-        + npcList.map((item, i) => 'NPC' + (i + 1) + ': [location] | [event sentence]').join('\n') + '\n'
-        + 'Example: NPC1: the marketplace | She haggled bitterly over a bag of spices with an impatient merchant.';
+        + npcList.map((item, i) => 'NPC' + (i + 1) + ': [location] | [event sentence or "No offscreen events. Currently in scene."]').join('\n') + '\n'
+        + 'Example offscreen: NPC1: the marketplace | She haggled bitterly over a bag of spices with an impatient merchant.\n'
+        + 'Example in-scene: NPC2: Тюменское ГУВД, кабинет Парфёнова | No offscreen events. Currently in scene.';
 
     console.log('[WildOffscreen] Batch prompt for', npcList.length, 'NPCs, userContent length:', userContent.length);
 
@@ -506,8 +595,11 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext) {
             role: 'system',
             content: 'You write brief offscreen event summaries for story characters. '
                 + 'Dry, specific, one sentence per character. No names at sentence start. No dialogue. '
-                + 'CRITICAL RULE 1: First, carefully check the recent chat history. If a character is CURRENTLY actively participating in the scene with the user, DO NOT invent offscreen events for them. Instead, just write: "No offscreen events. Currently in scene." and note their location. '
-                + 'CRITICAL RULE 2: For characters who are truly offscreen, absolutely DO NOT repeat the same actions, phrasings, or themes from the RECENT OFFSCREEN EVENTS. Every new event must be completely unique and distinct.',
+                + 'CRITICAL RULE 1: Each NPC is marked [IN SCENE] or [OFFSCREEN]. '
+                + 'For [IN SCENE] characters: they are physically present in the active scene right now. You MUST write exactly: "[location] | No offscreen events. Currently in scene." — no exceptions, no invented events. '
+                + 'For [OFFSCREEN] characters: they are NOT in the current scene. Generate one offscreen event sentence for them. '
+                + 'CRITICAL RULE 2: For [OFFSCREEN] characters, absolutely DO NOT repeat the same actions, phrasings, or themes from RECENT OFFSCREEN EVENTS. Every new event must be completely unique and distinct. '
+                + 'CRITICAL RULE 3: Follow the exact output format specified. One line per NPC, no extra text.',
         },
         { role: 'user', content: userContent },
     ];
@@ -576,7 +668,8 @@ async function generateEventsForAllNPCs(npcs) {
 
     const npcList = keys.map(k => ({ npc: npcs[k], key: k, params: rollEventParams() }));
 
-    const messages = buildBatchMessages(npcList, mainCharInfo, sharedChat);
+    const sceneInfo = parseSceneInfo();
+    const messages = buildBatchMessages(npcList, mainCharInfo, sharedChat, sceneInfo);
     const rawText = await callAPI(messages);
     console.log('[WildOffscreen] Batch response:', rawText?.slice(0, 500));
 
@@ -1074,7 +1167,8 @@ jQuery(async () => {
                             .join('\n');
                     } catch(e) { return ''; }
                 })();
-                const msgs = buildBatchMessages(npcList, mainInfo, sharedChat);
+                const _sceneInfo = parseSceneInfo();
+                const msgs = buildBatchMessages(npcList, mainInfo, sharedChat, _sceneInfo);
                 const preview = msgs[1].content.slice(0, 600);
                 panel.append('<div class="wo_debug_entry"><code style="word-break:break-all;font-size:0.78em;">'
                     + preview.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
