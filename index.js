@@ -24,8 +24,8 @@ const EXT = 'wild-offscreen';
 const INJECTION_POSITION = 1;
 
 const DEFAULTS = {
-    maxMessages: 30,
-    maxCharsPerMsg: 2000,
+    maxMessages: 30,       // НОВЫЙ ПАРАМЕТР
+    maxCharsPerMsg: 2000,  // НОВЫЙ ПАРАМЕТР
     enabled: true,
     triggerEvery: 5,
     maxEvents: 7,
@@ -470,8 +470,7 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext) {
         const impact = params.isPositive ? 'POSITIVE' : 'NEGATIVE';
         const scaleDesc = SCALE_DESC[params.scale.id] || params.scale.label;
         const catDesc = CATEGORY_DESC[params.category] || params.category;
-        const npcContextResult = getChatContextForNPC(npc);
-        const npcContext = npcContextResult.text;
+const npcContextResult = getChatContextForNPC(npc, s.maxMessages, s.maxCharsPerMsg);        const npcContext = npcContextResult.text;
         const lastLoc = npc.lastLocation ? 'Last known location: ' + npc.lastLocation : '';
 
         return '--- NPC ' + (i + 1) + ': ' + npc.name + ' ---\n'
@@ -785,6 +784,7 @@ function renderNPCList() {
 }
 
 function buildUI() {
+    const s = getSettings();
     const html = `
     <div id="wo_panel" class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
@@ -792,8 +792,11 @@ function buildUI() {
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
-            <label class="checkbox_label"><input type="checkbox" id="wo_toggle" /><span>Enable</span></label>
+            <label class="checkbox_label"><input type="checkbox" id="wo_toggle" ${s.enabled ? 'checked' : ''} /><span>Enable</span></label>
             <div id="wo_status" class="wo_status" style="display:none;"></div>
+
+            <div class="wo_section_label">Current Story Date</div>
+            <div id="wo_date_display" style="font-family: monospace; color: var(--SmartThemeQuoteColor); margin-bottom: 10px; font-weight: bold;">—</div>
 
             <div id="wo_npc_list" class="wo_npc_list"></div>
 
@@ -812,21 +815,22 @@ function buildUI() {
 
             <hr>
 
-            <div class="wo_section_label">Connection Profile</div>
-            <label><small>Uses your SillyTavern Connection Profiles</small></label>
-            <div class="wo_actions">
-                <select id="wo_profile_select" class="text_pole" style="flex:1;"></select>
-                <input type="button" id="wo_profile_refresh" class="menu_button" value="↻" title="Refresh profiles list" style="flex:none;width:36px;" />
-            </div>
+            <div class="wo_section_label">Token Context Settings</div>
+            <label><small>Messages history depth (how many messages to read)</small></label>
+            <input type="number" id="wo_max_messages" class="text_pole" value="${s.maxMessages || 30}" />
+            <label><small>Max characters per message (truncation limit)</small></label>
+            <input type="number" id="wo_max_chars" class="text_pole" value="${s.maxCharsPerMsg || 2000}" />
 
             <hr>
 
+            <div class="wo_section_label">Connection Profile</div>
+            <select id="wo_profile_select" class="text_pole" style="width:100%;"></select>
+
+            <div class="wo_section_label">Event Settings</div>
             <label><small>Generate events every N messages</small></label>
-            <input type="number" id="wo_trigger_every" class="text_pole" min="1" max="50" step="1" />
+            <input type="number" id="wo_trigger_every" class="text_pole" value="${s.triggerEvery}" />
             <label><small>Max stored events per NPC</small></label>
-            <input type="number" id="wo_max_events" class="text_pole" min="1" max="20" step="1" />
-            <label><small>Inject only NPCs seen in last N messages (0 = all)</small></label>
-            <input type="number" id="wo_inject_max" class="text_pole" min="0" max="200" step="1" />
+            <input type="number" id="wo_max_events" class="text_pole" value="${s.maxEvents}" />
         </div>
     </div>`;
     $('#extensions_settings').append(html);
@@ -842,6 +846,21 @@ jQuery(async () => {
     $('#wo_trigger_every').val(s.triggerEvery);
     $('#wo_max_events').val(s.maxEvents);
     $('#wo_inject_max').val(s.injectMaxMessages);
+
+    $('#wo_max_messages').val(s.maxMessages || 30);
+    $('#wo_max_chars').val(s.maxCharsPerMsg || 2000);
+
+    function updateDateDisplay() {
+        const ctx = SillyTavern.getContext();
+        const chat = ctx.chat || [];
+        const lastMsgWithTime = [...chat].reverse().find(m => m.mes && /\d{4}\/\d{2}\/\d{2}/.test(m.mes));
+        const match = lastMsgWithTime ? lastMsgWithTime.mes.match(/(\d{4}\/\d{2}\/\d{2})/) : null;
+        $('#wo_date_display').text(match ? match[1] : 'No date found in history');
+    }
+
+    updateDateDisplay();
+
+    updateDateDisplay();
 
     function refreshProfileSelect() {
         const profiles = getConnectionProfiles();
@@ -865,20 +884,18 @@ jQuery(async () => {
     renderNPCList();
 
     $('#wo_toggle').on('change', function () { s.enabled = this.checked; saveSettingsDebounced(); updateInjection(); });
-
-    $('#wo_profile_select').on('change', function () {
-        s.connectionProfile = this.value;
-        saveSettingsDebounced();
-    });
-
-    $('#wo_profile_refresh').on('click', () => {
-        refreshProfileSelect();
-        toastr.info('Profiles refreshed.');
-    });
+    $('#wo_profile_select').on('change', function () { s.connectionProfile = this.value; saveSettingsDebounced(); });
+    
+    $('#wo_max_messages').on('input', function() { s.maxMessages = parseInt(this.value) || 30; saveSettingsDebounced(); });
+    $('#wo_max_chars').on('input', function() { s.maxCharsPerMsg = parseInt(this.value) || 2000; saveSettingsDebounced(); });
 
     $('#wo_trigger_every').on('input', function () { s.triggerEvery = parseInt(this.value) || DEFAULTS.triggerEvery; saveSettingsDebounced(); });
     $('#wo_max_events').on('input', function () { s.maxEvents = parseInt(this.value) || DEFAULTS.maxEvents; saveSettingsDebounced(); });
     $('#wo_inject_max').on('input', function () { s.injectMaxMessages = parseInt(this.value) || 0; saveSettingsDebounced(); });
+
+    eventSource.on(event_types.CHAT_CHANGED, () => {
+        updateDateDisplay();
+    });
 
     $('#wo_scan').on('click', async () => {
         $('#wo_status').text('Scanning…').show();
