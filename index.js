@@ -679,6 +679,49 @@ function getMainCharInfo() {
     } catch (e) { return ''; }
 }
 
+// ── Date normalization ────────────────────────────────────────────────────
+
+const MONTH_MAP = {
+    // Russian
+    'январь':1,'января':1,'jan':1,'january':1,
+    'февраль':2,'февраля':2,'feb':2,'february':2,
+    'март':3,'марта':3,'mar':3,'march':3,
+    'апрель':4,'апреля':4,'apr':4,'april':4,
+    'май':5,'мая':5,'may':5,
+    'июнь':6,'июня':6,'jun':6,'june':6,
+    'июль':7,'июля':7,'jul':7,'july':7,
+    'август':8,'августа':8,'aug':8,'august':8,
+    'сентябрь':9,'сентября':9,'sep':9,'september':9,
+    'октябрь':10,'октября':10,'oct':10,'october':10,
+    'ноябрь':11,'ноября':11,'nov':11,'november':11,
+    'декабрь':12,'декабря':12,'dec':12,'december':12,
+};
+
+/**
+ * Normalize a raw date string that may have word months.
+ * "2008/Ноябрь/12" → "2008/11/12"
+ * "2008/11/12" → unchanged
+ */
+function normalizeDateStr(str) {
+    if (!str) return str;
+    return str.replace(
+        /(\d{4})[\/]([Ѐ-ӿa-zA-Z]+)[\/](\d{1,2})/g,
+        (_, year, month, day) => {
+            const num = MONTH_MAP[month.toLowerCase()];
+            if (!num) return _;
+            return year + '/' + String(num).padStart(2, '0') + '/' + String(day).padStart(2, '0');
+        }
+    );
+}
+
+/** Test if a string contains any date-like pattern (numeric or word month) */
+function hasDatePattern(str) {
+    if (!str) return false;
+    if (/\d{4}\/\d{2}\/\d{2}/.test(str)) return true;
+    // word month: 2008/Ноябрь/12 or 2008/November/12
+    return /(\d{4})[\/]([Ѐ-ӿa-zA-Z]{3,})[\/](\d{1,2})/.test(str);
+}
+
 // ── Scene info parser ─────────────────────────────────────────────────────
 
 /**
@@ -690,19 +733,19 @@ function parseSceneInfo() {
     try {
         const ctx = SillyTavern.getContext();
         const chat = ctx.chat || [];
-        const lastMsg = [...chat].reverse().find(m => m.mes && /\d{4}\/\d{2}\/\d{2}/.test(m.mes));
+        const lastMsg = [...chat].reverse().find(m => m.mes && hasDatePattern(m.mes));
         if (!lastMsg) return null;
 
         let raw = null;
         // Try styled div first
         const divMatch = lastMsg.mes.match(/<div[^>]+border-left[^>]*?>([\s\S]*?)<\/div>/i);
         if (divMatch) {
-            const inner = divMatch[1].replace(/<[^>]+>/g, '').trim();
+            const inner = normalizeDateStr(divMatch[1].replace(/<[^>]+>/g, '').trim());
             if (/\d{4}\/\d{2}\/\d{2}/.test(inner)) raw = inner;
         }
         // Fallback: strip all tags and grab the first line with a date
         if (!raw) {
-            const stripped = lastMsg.mes.replace(/<[^>]+>/g, '');
+            const stripped = normalizeDateStr(lastMsg.mes.replace(/<[^>]+>/g, ''));
             const lineMatch = stripped.match(/.*\d{4}\/\d{2}\/\d{2}.*/);
             if (lineMatch) raw = lineMatch[0].trim();
         }
@@ -1054,7 +1097,7 @@ async function generateEventsForAllNPCs(npcs) {
         try {
             const ctx = SillyTavern.getContext();
             const chat = ctx.chat || [];
-            const lastMsgWithTime = [...chat].reverse().find(m => m.mes && /\d{4}\/\d{2}\/\d{2}/.test(m.mes));
+            const lastMsgWithTime = [...chat].reverse().find(m => m.mes && hasDatePattern(m.mes));
             const timeInfo = lastMsgWithTime
                 ? (lastMsgWithTime.mes.match(/(\d{4}\/\d{2}\/\d{2}[^<]*?) •/) || [])[1] || 'Unknown time'
                 : 'Unknown time';
@@ -1528,7 +1571,7 @@ jQuery(async () => {
         try {
             const ctx = SillyTavern.getContext();
             const chat = ctx.chat || [];
-            const lastMsg = [...chat].reverse().find(m => m.mes && /\d{4}\/\d{2}\/\d{2}/.test(m.mes));
+            const lastMsg = [...chat].reverse().find(m => m.mes && hasDatePattern(m.mes));
             const dateStr = lastMsg ? extractDateFromMessage(lastMsg.mes) : null;
             $('#wo_date_display').text(dateStr || 'No date found in history');
         } catch(e) {
