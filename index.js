@@ -28,10 +28,8 @@ const DEFAULTS = {
     triggerEvery: 5,
     maxEvents: 7,
     injectMaxMessages: 0,
-    // API settings
-    apiUrl: '',
-    apiKey: '',
-    apiModel: '',
+    connectionProfile: '', // ST Connection Profile name
+    maxTokens: 200,
 };
 
 const CATEGORIES = ['Personal', 'Relationship', 'Status', 'Discovery', 'Social'];
@@ -212,68 +210,108 @@ function registerNPCs(scanned) {
 // ── API call ───────────────────────────────────────────────
 
 /**
- * Fetch available models from the configured endpoint
+ * Get ST connection profiles list
  */
-async function fetchModels() {
-    const s = getSettings();
-    if (!s.apiUrl) return [];
-    const url = s.apiUrl.replace(/\/+$/, '') + '/v1/models';
-    try {
-        const headers = { 'Content-Type': 'application/json' };
-        if (s.apiKey) headers['Authorization'] = 'Bearer ' + s.apiKey;
-        const r = await fetch(url, { method: 'GET', headers });
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        const data = await r.json();
-        const models = data.data || data.models || [];
-        return models.map(m => m.id || m.name || m).filter(Boolean);
-    } catch (e) {
-        console.warn('[WildOffscreen] fetchModels failed:', e.message);
-        return [];
-    }
+function getConnectionProfiles() {
+    const ctx = SillyTavern.getContext();
+    return ctx.extensionSettings?.connectionManager?.profiles || [];
 }
 
 /**
- * Call OpenAI-compatible API directly
+ * Get currently selected ST connection profile name
+ */
+function getDefaultProfileName() {
+    const ctx = SillyTavern.getContext();
+    const cm = ctx.extensionSettings?.connectionManager;
+    if (!cm) return '';
+    return cm.profiles?.find(p => p.id === cm.selectedProfile)?.name
+        || cm.profiles?.[0]?.name
+        || '';
+}
+
+/**
+ * Call ST's own backend using the selected Connection Profile.
+ * Mirrors ExtBlocks ApiService.generateBlocks() pattern exactly.
  */
 async function callAPI(messages) {
     const s = getSettings();
-    if (!s.apiUrl) {
-        console.warn('[WildOffscreen] No API URL configured');
-        return null;
-    }
-    if (!s.apiModel) {
-        console.warn('[WildOffscreen] No model selected');
+    const ctx = SillyTavern.getContext();
+    const profiles = getConnectionProfiles();
+
+    if (!profiles.length) {
+        console.warn('[WildOffscreen] No connection profiles found in ST');
         return null;
     }
 
-    const url = s.apiUrl.replace(/\/+$/, '') + '/v1/chat/completions';
-    const headers = { 'Content-Type': 'application/json' };
-    if (s.apiKey) headers['Authorization'] = 'Bearer ' + s.apiKey;
+    // Pick the selected profile
+    const profileName = s.connectionProfile || getDefaultProfileName();
+    const profile = profiles.find(p => p.name === profileName) || profiles[0];
+
+    if (!profile) {
+        console.warn('[WildOffscreen] No connection profile available');
+        return null;
+    }
+
+    // Map ST API names (same as ExtBlocks does)
+    const apiName = profile.api || 'openai';
+    const cc_source = apiName === 'google' ? 'makersuite' : apiName;
+
+    const generate_data = {
+        messages,
+        model: profile.model || '',
+        temperature: 0.85,
+        max_tokens: 120,
+        stream: false,
+        chat_completion_source: cc_source,
+    };
+
+    // Handle secret-id for some providers
+    if (profile['secret-id']) {
+        generate_data['secret_id'] = profile['secret-id'];
+    }
+
+    // Custom URL for custom API type
+    if (cc_source === 'custom' && profile['api-url']) {
+        generate_data['custom_url'] = profile['api-url'].trim().replace(/\/+$/, '');
+    }
+
+    // Vertex AI region
+    if (cc_source === 'vertexai' && profile['api-url']) {
+        generate_data['vertexai_region'] = profile['api-url'];
+    }
+
+    // Use sysprompt for Claude and Gemini
+    if (cc_source === 'makersuite' || cc_source === 'claude') {
+        generate_data['use_sysprompt'] = true;
+    }
+
+    console.log('[WildOffscreen] Calling ST backend, profile:', profile.name, 'source:', cc_source, 'model:', profile.model);
 
     try {
-        const r = await fetch(url, {
+        const r = await fetch('/api/backends/chat-completions/generate', {
             method: 'POST',
-            headers,
-            body: JSON.stringify({
-                model: s.apiModel,
-                messages,
-                max_tokens: 120,
-                temperature: 0.85,
-            }),
+            headers: getRequestHeaders(),
+            body: JSON.stringify(generate_data),
         });
 
         const text = await r.text();
-        console.log('[WildOffscreen] API response:', r.status, text.slice(0, 200));
+        console.log('[WildOffscreen] ST backend response:', r.status, text.slice(0, 300));
 
         if (!r.ok) {
-            console.error('[WildOffscreen] API error:', r.status, text.slice(0, 200));
+            console.error('[WildOffscreen] ST backend error:', r.status, text.slice(0, 300));
             return null;
         }
 
         const data = JSON.parse(text);
-        return data.choices?.[0]?.message?.content?.trim() || null;
+
+        // Extract text based on source format (mirrors ExtBlocks extractMessageFromData)
+        if (cc_source === 'claude') {
+            return data?.content?.[0]?.text?.trim() || null;
+        } else {
+            return data?.choices?.[0]?.message?.content?.trim() || null;
+        }
     } catch (e) {
-        console.error('[WildOffscreen] API fetch error:', e.message);
+        console.error('[WildOffscreen] ST backend fetch error:', e.message);
         return null;
     }
 }
@@ -475,22 +513,11 @@ function buildUI() {
 
             <hr>
 
-            <div class="wo_section_label">API Settings</div>
-
-            <label><small>API URL (OpenAI-compatible endpoint)</small></label>
-            <input type="text" id="wo_api_url" class="text_pole" placeholder="http://localhost:5001" />
-
-            <label><small>API Key (leave empty if not needed)</small></label>
-            <input type="password" id="wo_api_key" class="text_pole" placeholder="sk-..." />
-
-            <label><small>Model</small></label>
+            <div class="wo_section_label">Connection Profile</div>
+            <label><small>Uses your SillyTavern Connection Profiles</small></label>
             <div class="wo_actions">
-                <select id="wo_api_model" class="text_pole" style="flex:1;"></select>
-                <input type="button" id="wo_fetch_models" class="menu_button" value="↻" title="Fetch models from endpoint" style="flex:none;width:36px;" />
-            </div>
-            <div id="wo_model_manual_wrap">
-                <label><small>Or type model name manually</small></label>
-                <input type="text" id="wo_api_model_manual" class="text_pole" placeholder="gemini-2.0-flash, gpt-4o-mini, etc." />
+                <select id="wo_profile_select" class="text_pole" style="flex:1;"></select>
+                <input type="button" id="wo_profile_refresh" class="menu_button" value="↻" title="Refresh profiles list" style="flex:none;width:36px;" />
             </div>
 
             <hr>
@@ -513,59 +540,45 @@ jQuery(async () => {
     const s = getSettings();
 
     $('#wo_toggle').prop('checked', s.enabled);
-    $('#wo_api_url').val(s.apiUrl);
-    $('#wo_api_key').val(s.apiKey);
-    $('#wo_api_model_manual').val(s.apiModel);
     $('#wo_trigger_every').val(s.triggerEvery);
     $('#wo_max_events').val(s.maxEvents);
     $('#wo_inject_max').val(s.injectMaxMessages);
 
-    // Populate model select if model already saved
-    if (s.apiModel) {
-        $('#wo_api_model').append(`<option value="${s.apiModel}" selected>${s.apiModel}</option>`);
-    } else {
-        $('#wo_api_model').append('<option value="">-- fetch models or type below --</option>');
+    // Populate profile selector
+    function refreshProfileSelect() {
+        const profiles = getConnectionProfiles();
+        const select = $('#wo_profile_select');
+        select.empty();
+        if (!profiles.length) {
+            select.append('<option value="">-- no profiles found --</option>');
+            return;
+        }
+        const currentName = s.connectionProfile || getDefaultProfileName();
+        for (const p of profiles) {
+            select.append(`<option value="${p.name}" ${p.name === currentName ? 'selected' : ''}>${p.name} (${p.api || '?'} / ${p.model || 'no model'})</option>`);
+        }
+        // Save current selection
+        if (!s.connectionProfile) {
+            s.connectionProfile = currentName;
+            saveSettingsDebounced();
+        }
     }
 
+    refreshProfileSelect();
     renderNPCList();
 
     // ── Settings handlers ──
 
     $('#wo_toggle').on('change', function () { s.enabled = this.checked; saveSettingsDebounced(); updateInjection(); });
 
-    $('#wo_api_url').on('input', function () { s.apiUrl = this.value.trim(); saveSettingsDebounced(); });
-    $('#wo_api_key').on('input', function () { s.apiKey = this.value.trim(); saveSettingsDebounced(); });
-
-    // Model select takes priority over manual input
-    $('#wo_api_model').on('change', function () {
-        if (this.value) {
-            s.apiModel = this.value;
-            $('#wo_api_model_manual').val(this.value);
-            saveSettingsDebounced();
-        }
-    });
-
-    // Manual input updates model and select
-    $('#wo_api_model_manual').on('input', function () {
-        s.apiModel = this.value.trim();
+    $('#wo_profile_select').on('change', function () {
+        s.connectionProfile = this.value;
         saveSettingsDebounced();
     });
 
-    // Fetch models button
-    $('#wo_fetch_models').on('click', async () => {
-        if (!s.apiUrl) { toastr.warning('Enter API URL first.'); return; }
-        $('#wo_fetch_models').prop('disabled', true).text('…');
-        const models = await fetchModels();
-        $('#wo_fetch_models').prop('disabled', false).text('↻');
-        if (!models.length) { toastr.warning('No models found. Check URL and key.'); return; }
-
-        const select = $('#wo_api_model');
-        select.empty();
-        select.append('<option value="">-- select model --</option>');
-        for (const m of models) {
-            select.append(`<option value="${m}" ${m === s.apiModel ? 'selected' : ''}>${m}</option>`);
-        }
-        toastr.success(`Found ${models.length} models.`);
+    $('#wo_profile_refresh').on('click', () => {
+        refreshProfileSelect();
+        toastr.info('Profiles refreshed.');
     });
 
     $('#wo_trigger_every').on('input', function () { s.triggerEvery = parseInt(this.value) || DEFAULTS.triggerEvery; saveSettingsDebounced(); });
@@ -608,8 +621,8 @@ jQuery(async () => {
 
     // ── Generate now ──
     $('#wo_generate_now').on('click', async () => {
-        if (!s.apiUrl || !s.apiModel) {
-            toastr.error('Configure API URL and model in settings first.');
+        if (!getConnectionProfiles().length) {
+            toastr.error('No ST Connection Profiles found. Create one in SillyTavern settings first.');
             return;
         }
         await runGenerationCycle();
