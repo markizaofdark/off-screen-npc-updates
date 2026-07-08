@@ -90,11 +90,18 @@ function isNPCEntry(entry) {
     return isBeforeChar || hasCharKw;
 }
 
-function extractNPCInfo(entry) {
+function extractNPCInfo(entry, bookName) {
     if (entry.disable === true || entry.enabled === false) return null;
     const name = entry.comment || entry.name || (Array.isArray(entry.key) ? entry.key[0] : entry.key) || null;
     if (!name?.trim()) return null;
-    return { name: name.trim(), description: (entry.content || '').trim() };
+    const keys = (Array.isArray(entry.key) ? entry.key : [entry.key || '']).filter(k => k && k !== 'character');
+    return {
+        name: name.trim(),
+        description: (entry.content || '').trim(),
+        searchKeys: keys,
+        lorebookName: bookName || '',
+        entryUid: entry.uid ?? entry.id ?? null,
+    };
 }
 
 // ── Lorebook access ────────────────────────────────────────
@@ -155,7 +162,7 @@ async function scanCharacterLorebooks() {
         console.log(`[WildOffscreen] "${bookName}": ${entries.length} entries`);
         for (const entry of entries) {
             if (!isNPCEntry(entry)) continue;
-            const info = extractNPCInfo(entry);
+            const info = extractNPCInfo(entry, bookName);
             if (info) { npcs.push(info); console.log(`[WildOffscreen]   ✓ ${info.name}`); }
         }
     }
@@ -191,7 +198,7 @@ function parseLorebookJSON(data) {
     for (const e of entries) {
         if (!e || typeof e !== 'object') continue;
         if (!isNPCEntry(e)) continue;
-        const info = extractNPCInfo(e);
+        const info = extractNPCInfo(e, '');
         if (info) found.push(info);
     }
     return found;
@@ -343,14 +350,164 @@ function getMainCharInfo() {
  * Falls back to last 5 messages if no mentions found.
  */
 /**
+ * Parse a regex string from lorebook key (e.g. "/pattern/flags")
+ * Returns RegExp or null if not a regex pattern.
+ */
+function parseRegexKey(key) {
+    const m = key.match(/^\/(.+)\/([gimsuy]*)$/);
+    if (!m) return null;
+    try { return new RegExp(m[1], m[2] || 'i'); } catch(e) { return null; }
+}
+
+/**
+ * Build a simple stem regex for a Russian/Latin word.
+ * Matches word boundary + stem + any Cyrillic/Latin ending.
+ * Pattern mirrors the example: /(?:^|[^а-яёА-ЯЁ])Стем(?:endings)?(?=[^а-яёА-ЯЁ]|$)/
+ */
+function buildStemRegex(word) {
+    word = word.trim();
+    if (!word || word.length < 2) return null;
+    const isCyrillic = /[а-яёА-ЯЁ]/.test(word);
+    const stem = word.length > 5 ? word.slice(0, -2) : word.length > 3 ? word.slice(0, -1) : word;
+    const charClass = isCyrillic ? 'а-яёА-ЯЁ' : 'a-zA-Z';
+    try {
+        return new RegExp(
+            '(?:^|[^' + charClass + '])' + stem + '[' + charClass + ']*(?=[^' + charClass + ']|$)',
+            'i'
+        );
+    } catch(e) { return null; }
+}
+
+/**
+ * Build search regexes for one NPC.
+ * Priority:
+ *   1. Regex keys from lorebook (most precise — set by "Generate Regexes" button)
+ *   2. Plain-text keys from lorebook (stem-matched)
+ *   3. Name parts as fallback
+ */
+function buildSearchRegexes(npc) {
+    const results = [];
+    const seen = new Set();
+
+    const addRegex = (term, regex) => {
+        const key = term.toLowerCase();
+        if (seen.has(key) || !regex) return;
+        seen.add(key);
+        results.push({ term, regex });
+    };
+
+    const keys = npc.searchKeys || [];
+
+    // Pass 1: proper regex keys (e.g. "/Андре[а-яё]*/i")
+    for (const k of keys) {
+        const rx = parseRegexKey(k);
+        if (rx) addRegex(k, rx);
+    }
+
+    // Pass 2: plain text keys → stem regex
+    for (const k of keys) {
+        if (!parseRegexKey(k) && k && k.length > 1) {
+            addRegex(k, buildStemRegex(k));
+        }
+    }
+
+    // Pass 3: name parts fallback
+    const nameParts = npc.name.trim().split(/\s+/).filter(p => p.length > 2);
+    for (const p of nameParts) {
+        addRegex(p, buildStemRegex(p));
+    }
+
+    return results;
+}
+
+// ── Regex generation via AI ────────────────────────────────
+
+/**
+ * Ask the model to generate Russian morphology regexes for an NPC name.
+ */
+async function generateRegexesForNPC(npcName) {
+    const messages = [
+        {
+            role: 'system',
+            content: 'You are a regex expert. Generate JavaScript regex patterns for Russian morphology. Output only valid JSON, nothing else.',
+        },
+        {
+            role: 'user',
+            content: 'Generate regex patterns for all Russian case forms of the name/word: "' + npcName + '"\n'
+                + 'Rules:\n'
+                + '- Each regex must match word boundaries (not inside other words)\n'
+                + '- Use pattern: /(?:^|[^а-яёА-ЯЁ])STEM(?:endings)?(?=[^а-яёА-ЯЁ]|$)/gi\n'
+                + '- Generate one regex per distinct stem (first name, last name, nickname separately)\n'
+                + '- Output ONLY a JSON array of regex strings, e.g.: ["/(?:^|[^а-яёА-ЯЁ])[Аа]ндре[а-яё]*(?=[^а-яёА-ЯЁ]|$)/gi"]\n'
+                + '- No explanation, no markdown, just the JSON array.',
+        },
+    ];
+
+    const text = await callAPI(messages);
+    if (!text) return null;
+
+    try {
+        const clean = text.replace(/^```[\w]*\n?/, '').replace(/\n?```$/, '').trim();
+        const arr = JSON.parse(clean);
+        if (!Array.isArray(arr)) return null;
+        // Validate each entry is a working regex string
+        return arr.filter(r => {
+            if (typeof r !== 'string') return false;
+            try { parseRegexKey(r); return true; } catch(e) { return false; }
+        });
+    } catch(e) {
+        console.error('[WildOffscreen] Failed to parse regex JSON:', e.message, text.slice(0, 200));
+        return null;
+    }
+}
+
+/**
+ * Save updated keys back to the lorebook via ST API.
+ */
+async function saveRegexesToLorebook(bookName, entryUid, newKeys) {
+    // First fetch the full lorebook
+    const baseHeaders = getRequestHeaders();
+    const r = await fetch('/api/worldinfo/get', {
+        method: 'POST',
+        headers: { ...baseHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: bookName }),
+    });
+    if (!r.ok) throw new Error('Failed to fetch lorebook: ' + r.status);
+    const data = await r.json();
+
+    // Update the entry keys
+    const entry = data.entries?.[entryUid] || data.entries?.[String(entryUid)];
+    if (!entry) throw new Error('Entry uid ' + entryUid + ' not found in lorebook');
+
+    // Merge new regex keys with existing, avoid duplicates
+    const existing = Array.isArray(entry.key) ? entry.key : [entry.key].filter(Boolean);
+    const merged = [...new Set([...existing, ...newKeys])];
+    entry.key = merged;
+
+    // Save back
+    const saveR = await fetch('/api/worldinfo/import', {
+        method: 'POST',
+        headers: { ...baseHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: bookName, data }),
+    });
+    if (!saveR.ok) throw new Error('Failed to save lorebook: ' + saveR.status);
+    return merged;
+}
+
+/**
  * Returns { text, debug } — context string + debug info object
  */
-function getChatContextForNPC(npcName, maxMessages = 8, maxCharsPerMsg = 2000) {
+function getChatContextForNPC(npc, maxMessages = 8, maxCharsPerMsg = 2000) {
+    // Accept either NPC object or plain name string (backward compat)
+    const npcObj = typeof npc === 'string' ? { name: npc, searchKeys: [] } : npc;
+    const npcName = npcObj.name;
+
     const debugInfo = {
         npc: npcName,
         totalMessages: 0,
         nonSystemMessages: 0,
         searchTerms: [],
+        searchRegexes: [],
         mentionCount: 0,
         usedMessages: 0,
         fallback: false,
@@ -365,15 +522,15 @@ function getChatContextForNPC(npcName, maxMessages = 8, maxCharsPerMsg = 2000) {
         const nonSystem = chat.filter(m => !m.is_system && m.mes);
         debugInfo.nonSystemMessages = nonSystem.length;
 
-        const nameParts = npcName.trim().split(/\s+/).filter(p => p.length > 2);
-        const searchTerms = [npcName.toLowerCase(), ...nameParts.map(p => p.toLowerCase())];
-        debugInfo.searchTerms = searchTerms;
+        const regexPairs = buildSearchRegexes(npcObj);
+        debugInfo.searchTerms = regexPairs.map(r => r.term);
+        debugInfo.searchRegexes = regexPairs.map(r => r.regex.toString());
 
         const cleanMsg = (m) => m.mes.replace(/<[^>]+>/g, '').trim();
 
         const mentions = nonSystem.filter(m => {
-            const lower = cleanMsg(m).toLowerCase();
-            return searchTerms.some(term => lower.includes(term));
+            const text = cleanMsg(m);
+            return regexPairs.some(r => r.regex.test(text));
         });
         debugInfo.mentionCount = mentions.length;
 
@@ -436,7 +593,7 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext) {
         const impact = params.isPositive ? 'POSITIVE' : 'NEGATIVE';
         const scaleDesc = SCALE_DESC[params.scale.id] || params.scale.label;
         const catDesc = CATEGORY_DESC[params.category] || params.category;
-        const npcContextResult = getChatContextForNPC(npc.name);
+        const npcContextResult = getChatContextForNPC(npc);
         const npcContext = npcContextResult.text;
 
         return '--- NPC ' + (i + 1) + ': ' + npc.name + ' ---\n'
@@ -449,7 +606,8 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext) {
     const userContent = (mainCharInfo ? mainCharInfo + '\n\n' : '')
         + 'CURRENT STORY CONTEXT:\n' + (sharedChatContext || 'none') + '\n\n'
         + npcBlocks + '\n\n'
-        + 'For each NPC above, write exactly ONE sentence (15-25 words) describing what they just did or experienced offscreen.\n'
+        + 'For each NPC above, write exactly ONE sentence (15-25 words) describing what they just did or experienced INDEPENDENTLY, while away from the main scene.\n'
+        + 'These NPCs are NOT in the current scene. Do not place them near each other or near the main character unless the story context explicitly shows them together.\n'
         + 'Requirements for each sentence:\n'
         + '- Match the event requirements (impact/scale/type) listed for that NPC\n'
         + '- Be specific to their personality and situation\n'
@@ -619,6 +777,7 @@ function renderNPCList() {
                 <span class="wo_npc_name">${npc.name}</span>
                 <span class="wo_npc_count">${count} event${count !== 1 ? 's' : ''}</span>
                 <div class="wo_npc_actions">
+                    <button class="wo_btn_regex menu_button" title="Generate morphology regexes for this NPC">⚙</button>
                     <button class="wo_btn_toggle menu_button">${npc.enabled ? '⏸' : '▶'}</button>
                     <button class="wo_btn_clear menu_button">🗑</button>
                     <button class="wo_btn_delete menu_button">✕</button>
@@ -642,6 +801,45 @@ function renderNPCList() {
             if ($(e.target).closest('.wo_npc_actions').length) return;
             evContainer.slideToggle(150);
         });
+        card.find('.wo_btn_regex').on('click', async () => {
+            const btn = card.find('.wo_btn_regex');
+            btn.prop('disabled', true).text('…');
+
+            try {
+                const regexes = await generateRegexesForNPC(npc.name);
+                if (!regexes || !regexes.length) {
+                    toastr.error('Failed to generate regexes for ' + npc.name);
+                    return;
+                }
+
+                // Update in-memory searchKeys immediately
+                const n = getNPCs();
+                if (!n[key]) return;
+                const existing = n[key].searchKeys || [];
+                n[key].searchKeys = [...new Set([...existing, ...regexes])];
+                await saveNPCs(n);
+
+                // Save to lorebook if we have the info
+                if (npc.lorebookName && npc.entryUid !== null) {
+                    try {
+                        const merged = await saveRegexesToLorebook(npc.lorebookName, npc.entryUid, regexes);
+                        toastr.success('Regexes saved to lorebook for ' + npc.name + ' (' + regexes.length + ' added)');
+                        console.log('[WildOffscreen] Saved keys for', npc.name, ':', merged);
+                    } catch(e) {
+                        toastr.warning('Regexes saved in memory but lorebook save failed: ' + e.message);
+                        console.error('[WildOffscreen] Lorebook save error:', e);
+                    }
+                } else {
+                    toastr.success('Regexes generated for ' + npc.name + ' (no lorebook — saved in memory only)');
+                    console.log('[WildOffscreen] Generated regexes for', npc.name, ':', regexes);
+                }
+
+                renderNPCList();
+            } finally {
+                btn.prop('disabled', false).text('⚙');
+            }
+        });
+
         card.find('.wo_btn_toggle').on('click', async () => {
             const n = getNPCs(); n[key].enabled = !n[key].enabled;
             await saveNPCs(n); renderNPCList(); updateInjection();
@@ -851,13 +1049,13 @@ jQuery(async () => {
             panel.append('<div class="wo_debug_title" style="margin-top:8px;">NPC context search</div>');
             for (const key of keys) {
                 const npc = npcs[key];
-                const result = getChatContextForNPC(npc.name);
+                const result = getChatContextForNPC(npc);
                 const d = result.debug;
                 const statusColor = d.mentionCount > 0 ? '#66bb6a' : '#ffa726';
                 panel.append('<div class="wo_debug_entry">'
                     + '<b>' + npc.name + '</b>'
                     + (npc.enabled ? '' : ' <span style="color:#ef5350">[disabled]</span>') + '<br>'
-                    + 'Search terms: <code>' + d.searchTerms.join(', ') + '</code><br>'
+                    + 'Search terms: <code>' + d.searchTerms.join(', ') + '</code><br>'  + 'Regexes: <code>' + d.searchRegexes.join(' | ') + '</code><br>'
                     + 'Chat scanned: <code>' + d.nonSystemMessages + ' msgs</code><br>'
                     + 'Mentions found: <code style="color:' + statusColor + '">' + d.mentionCount + '</code><br>'
                     + 'Used in prompt: <code>' + d.usedMessages + ' msgs</code>'
