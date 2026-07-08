@@ -464,13 +464,15 @@ function rollEventParams() {
 }
 
 function buildBatchMessages(npcList, mainCharInfo, sharedChatContext) {
+    const s = getSettings();
     const npcBlocks = npcList.map((item, i) => {
         const { npc, params } = item;
         const history = npc.events.slice(-3).map(e => '- ' + e.text).join('\n') || 'None yet.';
         const impact = params.isPositive ? 'POSITIVE' : 'NEGATIVE';
         const scaleDesc = SCALE_DESC[params.scale.id] || params.scale.label;
         const catDesc = CATEGORY_DESC[params.category] || params.category;
-const npcContextResult = getChatContextForNPC(npc, s.maxMessages, s.maxCharsPerMsg);        const npcContext = npcContextResult.text;
+        const npcContextResult = getChatContextForNPC(npc, s.maxMessages, s.maxCharsPerMsg);
+        const npcContext = npcContextResult.text;
         const lastLoc = npc.lastLocation ? 'Last known location: ' + npc.lastLocation : '';
 
         return '--- NPC ' + (i + 1) + ': ' + npc.name + ' ---\n'
@@ -555,18 +557,21 @@ async function generateEventsForAllNPCs(npcs) {
 
     const mainCharInfo = getMainCharInfo();
     const sharedChat = (() => {
-    try {
-        const ctx = SillyTavern.getContext();
-        const lastMsgWithTime = (ctx.chat || []).reverse().find(m => m.mes.includes('2008/11/12')); 
-        const timeInfo = lastMsgWithTime ? lastMsgWithTime.mes.match(/(\d{4}\/\d{2}\/\d{2}.*?) •/)[1] : "Unknown time";
-
-        return (ctx.chat || [])
-            .filter(m => !m.is_system && m.mes)
-            .slice(-40)
-            .map(m => (m.is_user ? '[User]' : '[Bot]') + ' ' + m.mes.replace(/<[^>]+>/g, '').trim().slice(0, 3000))
-            .join('\n');
-    } catch(e) { return ''; }
-})();
+        try {
+            const ctx = SillyTavern.getContext();
+            const chat = ctx.chat || [];
+            const lastMsgWithTime = [...chat].reverse().find(m => m.mes && /\d{4}\/\d{2}\/\d{2}/.test(m.mes));
+            const timeInfo = lastMsgWithTime
+                ? (lastMsgWithTime.mes.match(/(\d{4}\/\d{2}\/\d{2}[^<]*?) •/) || [])[1] || 'Unknown time'
+                : 'Unknown time';
+            const s = getSettings();
+            return chat
+                .filter(m => !m.is_system && m.mes)
+                .slice(-s.maxMessages)
+                .map(m => (m.is_user ? '[User]' : '[Bot]') + ' ' + m.mes.replace(/<[^>]+>/g, '').trim().slice(0, s.maxCharsPerMsg))
+                .join('\n');
+        } catch(e) { return ''; }
+    })();
 
     const npcList = keys.map(k => ({ npc: npcs[k], key: k, params: rollEventParams() }));
 
@@ -824,7 +829,10 @@ function buildUI() {
             <hr>
 
             <div class="wo_section_label">Connection Profile</div>
-            <select id="wo_profile_select" class="text_pole" style="width:100%;"></select>
+            <div style="display:flex;gap:6px;align-items:center;">
+                <select id="wo_profile_select" class="text_pole" style="flex:1;"></select>
+                <input type="button" id="wo_profile_refresh" class="menu_button" value="🔄" title="Refresh profiles" style="flex-shrink:0;" />
+            </div>
 
             <div class="wo_section_label">Event Settings</div>
             <label><small>Generate events every N messages</small></label>
@@ -860,8 +868,6 @@ jQuery(async () => {
 
     updateDateDisplay();
 
-    updateDateDisplay();
-
     function refreshProfileSelect() {
         const profiles = getConnectionProfiles();
         const select = $('#wo_profile_select');
@@ -885,6 +891,7 @@ jQuery(async () => {
 
     $('#wo_toggle').on('change', function () { s.enabled = this.checked; saveSettingsDebounced(); updateInjection(); });
     $('#wo_profile_select').on('change', function () { s.connectionProfile = this.value; saveSettingsDebounced(); });
+    $('#wo_profile_refresh').on('click', () => { refreshProfileSelect(); toastr.info('Connection profiles refreshed.'); });
     
     $('#wo_max_messages').on('input', function() { s.maxMessages = parseInt(this.value) || 30; saveSettingsDebounced(); });
     $('#wo_max_chars').on('input', function() { s.maxCharsPerMsg = parseInt(this.value) || 2000; saveSettingsDebounced(); });
@@ -1006,16 +1013,16 @@ jQuery(async () => {
                 const npcList = enabledNpcs.map(k => ({ npc: npcs[k], key: k, params: rollEventParams() }));
                 const sharedChat = (() => {
                     try {
-                    const ctx = SillyTavern.getContext();
-                    const lastMsgWithTime = (ctx.chat || []).reverse().find(m => m.mes.includes('2008/11/12')); 
-                    const timeInfo = lastMsgWithTime ? lastMsgWithTime.mes.match(/(\d{4}\/\d{2}\/\d{2}.*?) •/)[1] : "Unknown time";
-                    return (ctx.chat || [])
-                        .filter(m => !m.is_system && m.mes)
-                        .slice(-40)
-                        .map(m => (m.is_user ? '[User]' : '[Bot]') + ' ' + m.mes.replace(/<[^>]+>/g, '').trim().slice(0, 3000))
-                        .join('\n');
-                } catch(e) { return ''; }
-            })();
+                        const ctx = SillyTavern.getContext();
+                        const chat = ctx.chat || [];
+                        const _s = getSettings();
+                        return chat
+                            .filter(m => !m.is_system && m.mes)
+                            .slice(-_s.maxMessages)
+                            .map(m => (m.is_user ? '[User]' : '[Bot]') + ' ' + m.mes.replace(/<[^>]+>/g, '').trim().slice(0, _s.maxCharsPerMsg))
+                            .join('\n');
+                    } catch(e) { return ''; }
+                })();
                 const msgs = buildBatchMessages(npcList, mainInfo, sharedChat);
                 const preview = msgs[1].content.slice(0, 600);
                 panel.append('<div class="wo_debug_entry"><code style="word-break:break-all;font-size:0.78em;">'
