@@ -45,6 +45,7 @@ const SCALE = [
 
 let msgCounter = 0;
 let lastChatLength = 0;  // tracks chat size to detect rerolls
+let isGenerating = false; // guard against re-entrant generation
 
 // ── Settings ───────────────────────────────────────────────
 
@@ -709,36 +710,48 @@ async function generateEventsForAllNPCs(npcs) {
 }
 
 async function runGenerationCycle() {
+    if (isGenerating) {
+        console.log('[WildOffscreen] Already generating, skipping.');
+        return;
+    }
     const npcs = getNPCs();
     const keys = Object.keys(npcs).filter(k => npcs[k].enabled);
     if (!keys.length) return;
 
+    isGenerating = true;
     $('#wo_status').text('Generating offscreen events…').show();
 
-    const beforeCounts = Object.fromEntries(keys.map(k => [k, npcs[k].events.length]));
+    try {
+        const beforeCounts = Object.fromEntries(keys.map(k => [k, npcs[k].events.length]));
 
-    await generateEventsForAllNPCs(npcs);
-    const firstGenerated = keys.filter(k => npcs[k].events.length > beforeCounts[k]).length;
-    if (firstGenerated === 0) {
-        console.log('[WildOffscreen] First attempt got 0 results, retrying...');
-        await new Promise(r => setTimeout(r, 1500));
         await generateEventsForAllNPCs(npcs);
-    }
+        const firstGenerated = keys.filter(k => npcs[k].events.length > beforeCounts[k]).length;
+        if (firstGenerated === 0) {
+            console.log('[WildOffscreen] First attempt got 0 results, retrying...');
+            await new Promise(r => setTimeout(r, 1500));
+            await generateEventsForAllNPCs(npcs);
+        }
 
-    await saveNPCs(npcs);
-    updateInjection();
-    renderNPCList();
-    $('#wo_status').text('').hide();
+        await saveNPCs(npcs);
+        updateInjection();
+        renderNPCList();
 
-    const generated = keys.filter(k => npcs[k].events.length > beforeCounts[k]).length;
-    const failed = keys.length - generated;
+        const generated = keys.filter(k => npcs[k].events.length > beforeCounts[k]).length;
+        const failed = keys.length - generated;
 
-    if (generated === 0) {
-        toastr.error('Generation failed. Check your connection profile and model.');
-    } else if (failed > 0) {
-        toastr.warning(`Generated events for ${generated}/${keys.length} NPCs.`);
-    } else {
-        toastr.success(`Generated events for all ${generated} NPCs in one request.`);
+        if (generated === 0) {
+            toastr.error('Generation failed. Check your connection profile and model.');
+        } else if (failed > 0) {
+            toastr.warning(`Generated events for ${generated}/${keys.length} NPCs.`);
+        } else {
+            toastr.success(`Generated events for all ${generated} NPCs in one request.`);
+        }
+    } catch(e) {
+        console.error('[WildOffscreen] runGenerationCycle error:', e.message);
+        toastr.error('Generation error: ' + e.message);
+    } finally {
+        isGenerating = false;
+        $('#wo_status').text('').hide();
     }
 }
 
@@ -778,6 +791,12 @@ function onGenerationStarted() {
     const s = getSettings();
     if (!s.enabled) return;
 
+    // If WE triggered this generation via callAPI, ignore it to avoid re-entrant loop
+    if (isGenerating) {
+        console.log('[WildOffscreen] Skipping GENERATION_STARTED fired by our own API call');
+        return;
+    }
+
     try {
         const ctx = SillyTavern.getContext();
         const currentLength = (ctx.chat || []).length;
@@ -785,7 +804,6 @@ function onGenerationStarted() {
         lastChatLength = currentLength;
 
         if (isReroll) {
-            // Reroll detected: pop the last event from each enabled NPC and regenerate
             console.log('[WildOffscreen] Reroll detected — removing last events and regenerating');
             const npcs = getNPCs();
             let removed = 0;
@@ -808,7 +826,11 @@ function onGenerationStarted() {
     }
 
     msgCounter++;
-    if (msgCounter >= s.triggerEvery) { msgCounter = 0; runGenerationCycle(); }
+    if (msgCounter >= s.triggerEvery) {
+        msgCounter = 0;
+        // Defer to let ST finish its own generation first, then run ours
+        setTimeout(() => runGenerationCycle(), 100);
+    }
     updateInjection();
 }
 
@@ -1044,10 +1066,6 @@ jQuery(async () => {
     $('#wo_max_events').on('input', function () { s.maxEvents = parseInt(this.value) || DEFAULTS.maxEvents; saveSettingsDebounced(); });
     $('#wo_inject_max').on('input', function () { s.injectMaxMessages = parseInt(this.value) || 0; saveSettingsDebounced(); });
 
-    eventSource.on(event_types.CHAT_CHANGED, () => {
-        updateDateDisplay();
-    });
-
     $('#wo_scan').on('click', async () => {
         $('#wo_status').text('Scanning…').show();
         try {
@@ -1182,7 +1200,52 @@ jQuery(async () => {
         }
     });
 
-    eventSource.on(event_types.GENERATION_STARTED, onGenerationStarted);
+    // CHARACTER_MESSAGE_RENDERED fires after the bot finishes writing — safe to count here.
+    // This avoids the re-entrant loop that GENERATION_STARTED caused (it fires during our own callAPI too).
+    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, () => {
+        updateDateDisplay();
+        if (isGenerating) return; // our own API call, ignore
+
+        const s = getSettings();
+        if (!s.enabled) return;
+
+        try {
+            const ctx = SillyTavern.getContext();
+            const currentLength = (ctx.chat || []).length;
+            const isReroll = currentLength === lastChatLength && currentLength > 0;
+            lastChatLength = currentLength;
+
+            if (isReroll) {
+                console.log('[WildOffscreen] Reroll detected — removing last events');
+                const npcs = getNPCs();
+                let removed = 0;
+                for (const key of Object.keys(npcs)) {
+                    if (npcs[key].enabled && npcs[key].events.length > 0) {
+                        npcs[key].events.pop();
+                        removed++;
+                    }
+                }
+                if (removed > 0) {
+                    saveNPCs(npcs).then(() => { renderNPCList(); updateInjection(); });
+                }
+                // Force generation this turn regardless of counter
+                msgCounter = s.triggerEvery;
+            }
+        } catch(e) {
+            console.warn('[WildOffscreen] CHARACTER_MESSAGE_RENDERED error:', e.message);
+        }
+
+        msgCounter++;
+        if (msgCounter >= s.triggerEvery) {
+            msgCounter = 0;
+            runGenerationCycle();
+        }
+    });
+
+    eventSource.on(event_types.USER_MESSAGE_RENDERED, () => {
+        updateDateDisplay();
+    });
+
     eventSource.on(event_types.CHAT_CHANGED, () => {
         msgCounter = 0;
         lastChatLength = 0;
@@ -1196,14 +1259,6 @@ jQuery(async () => {
             updateDateDisplay();
             $('#wo_book_info').text('Bot: ' + getBotKey());
         }, 200);
-    });
-
-    // Also update date display whenever a new message is rendered
-    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, () => {
-        updateDateDisplay();
-    });
-    eventSource.on(event_types.USER_MESSAGE_RENDERED, () => {
-        updateDateDisplay();
     });
 
     updateInjection();
