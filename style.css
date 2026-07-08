@@ -1,104 +1,270 @@
-/* Wild Events — Extension Styles */
+/* Wild Offscreen — Styles */
 
-#we_panel .inline-drawer-content {
+/* ── Panel base ─────────────────────────────────────── */
+
+#wo_panel .inline-drawer-content {
     padding: 8px 0;
 }
 
-.we_section {
-    margin: 6px 0;
+/* ── Section labels ─────────────────────────────────── */
+
+.wo_section_label {
+    font-size: 0.82em;
+    font-weight: 600;
+    opacity: 0.6;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 10px;
+    margin-bottom: 4px;
 }
 
-.we_row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 2px 0;
-    font-size: 0.92em;
-}
+/* ── Status & book info ─────────────────────────────── */
 
-.we_row span:first-child {
+.wo_status {
+    font-size: 0.85em;
     opacity: 0.7;
-}
-
-/* Tension bar */
-.we_bar_bg {
-    width: 100%;
-    height: 4px;
-    background: color-mix(in srgb, var(--SmartThemeBodyColor) 15%, transparent);
-    border-radius: 2px;
-    margin-top: 4px;
-    overflow: hidden;
-}
-
-.we_bar_fill {
-    height: 100%;
-    width: 0%;
-    background: linear-gradient(90deg, #66bb6a, #ffa726, #ef5350);
-    border-radius: 2px;
-    transition: width 0.3s ease;
-}
-
-.we_results {
-    background: color-mix(in srgb, var(--SmartThemeBodyColor) 5%, transparent);
-    border-radius: 4px;
-    padding: 6px 8px;
-}
-
-/* Event type row */
-.we_type_row {
-    font-size: 0.8em;
-    opacity: 0.75;
-    padding: 3px 0 4px 0;
-    line-height: 1.35;
+    padding: 4px 0;
     font-style: italic;
 }
 
-/* ── Icon alignment ──────────────────────────────────── */
+.wo_book_info {
+    font-size: 0.85em;
+    opacity: 0.7;
+    padding: 2px 0 6px 0;
+}
 
-.wo_npc_actions .menu_button i,
-.wo_btn_delete_event i,
-.wo_btn_promote_event i,
-.wo_btn_delete_fact i {
+/* ── Action button rows ─────────────────────────────── */
+
+.wo_actions {
+    display: flex;
+    gap: 6px;
+    margin: 4px 0;
+}
+
+.wo_actions .menu_button,
+.wo_actions label.menu_button {
+    flex: 1;
+    font-size: 0.85em;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    cursor: pointer;
+}
+
+.wo_file_btn {
+    cursor: pointer;
+    text-align: center;
+}
+
+/* Fix <button> to match ST's <input type=button> menu_button look */
+button.menu_button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    cursor: pointer;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+/* ── NPC list ───────────────────────────────────────── */
+
+.wo_npc_list {
+    margin: 8px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 420px;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+.wo_empty {
+    font-size: 0.85em;
+    opacity: 0.5;
+    padding: 8px 0;
+    text-align: center;
+}
+
+/* ── NPC card ───────────────────────────────────────── */
+
+.wo_npc_card {
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor) 15%, transparent);
+    border-radius: 4px;
+    overflow: hidden;
+    flex-shrink: 0;
+    box-sizing: border-box;
+    width: 100%;
+}
+
+.wo_npc_card.wo_npc_disabled {
+    opacity: 0.45;
+}
+
+.wo_npc_header {
+    display: flex;
+    align-items: center;
+    padding: 5px 8px;
+    cursor: pointer;
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 5%, transparent);
+    gap: 6px;
+    user-select: none;
+}
+
+.wo_npc_header:hover {
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 10%, transparent);
+}
+
+.wo_npc_name {
+    flex: 1;
+    font-weight: 600;
+    font-size: 0.92em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.wo_npc_count {
+    font-size: 0.78em;
+    opacity: 0.55;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 3px;
+}
+
+.wo_npc_actions {
+    display: flex;
+    gap: 2px;
+    flex-shrink: 0;
+}
+
+.wo_npc_actions .menu_button {
+    padding: 2px 6px;
+    font-size: 0.8em;
+    min-width: unset;
+    width: auto;
+    height: unset;
+    line-height: 1.4;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* ── Events area ────────────────────────────────────── */
+
+.wo_npc_events {
+    padding: 6px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    border-top: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor) 10%, transparent);
+}
+
+.wo_no_events {
+    font-size: 0.82em;
+    opacity: 0.45;
+    font-style: italic;
+}
+
+.wo_npc_location {
+    font-size: 0.8em;
+    opacity: 0.55;
+    padding: 2px 0 4px 0;
+    font-style: italic;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+/* ── Individual event ───────────────────────────────── */
+
+.wo_event {
+    font-size: 0.85em;
+}
+
+.wo_event_meta {
+    font-size: 0.78em;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    flex-wrap: wrap;
+    margin-bottom: 1px;
+}
+
+.wo_event_text {
+    opacity: 0.85;
+    line-height: 1.4;
+}
+
+.wo_event_loc {
+    font-size: 0.75em;
+    opacity: 0.55;
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    margin-bottom: 1px;
+}
+
+/* Small action buttons inside events */
+.wo_btn_delete_event,
+.wo_btn_promote_event,
+.wo_btn_delete_fact {
+    padding: 1px 5px !important;
+    font-size: 0.75em !important;
+    min-width: unset !important;
+    width: auto !important;
+    height: unset !important;
+    line-height: 1.4 !important;
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+}
+
+/* ── Date display ───────────────────────────────────── */
+
+#wo_date_display {
+    font-family: monospace;
+    color: var(--SmartThemeQuoteColor);
+    margin-bottom: 8px;
+    font-weight: bold;
     font-size: 0.9em;
+}
+
+/* ── Icon tweaks ────────────────────────────────────── */
+
+.menu_button i {
     pointer-events: none;
+    font-size: 0.9em;
 }
 
-.wo_npc_name ~ .wo_npc_count i {
-    opacity: 0.7;
-    font-size: 0.85em;
-}
-
-.wo_npc_location i,
-.wo_event_loc i {
-    font-size: 0.85em;
-    opacity: 0.7;
-    margin-right: 2px;
-}
-
-.wo_event_meta i.fa-caret-up,
-.wo_event_meta i.fa-caret-down {
+.wo_event_meta i {
     font-size: 1em;
 }
 
 .wo_event_meta i.fa-star {
-    font-size: 0.8em;
     color: #ffa726;
+    font-size: 0.85em;
 }
 
-/* Permanent facts and recent events section headers */
-.wo_npc_events > div[style*="uppercase"] i {
-    opacity: 0.7;
-    margin-right: 3px;
+/* ── Manual add textarea ────────────────────────────── */
+
+#wo_manual_desc {
+    width: 100%;
+    box-sizing: border-box;
+    margin-bottom: 4px;
+    font-size: 0.85em;
 }
 
-/* Toolbar buttons with icons */
-#wo_scan i,
-#wo_generate_now i,
-#wo_debug_btn i,
-#wo_profile_refresh i {
-    margin-right: 4px;
+#wo_manual_name {
+    width: 100%;
+    box-sizing: border-box;
+    margin-bottom: 4px;
 }
 
-#wo_profile_refresh i {
-    margin-right: 0;
+#wo_manual_add {
+    width: 100%;
 }
