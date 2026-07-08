@@ -64,8 +64,13 @@ button.menu_button {
     justify-content: center;
     gap: 5px;
     cursor: pointer;
-    width: 100%;
     box-sizing: border-box;
+}
+
+/* Full-width only inside action rows */
+.wo_actions button.menu_button,
+#wo_manual_add {
+    width: 100%;
 }
 
 /* ── NPC list ───────────────────────────────────────── */
@@ -267,4 +272,18 @@ button.menu_button {
 
 #wo_manual_add {
     width: 100%;
+}
+
+/* ── Connection profile row ─────────────────────────── */
+
+#wo_profile_select {
+    flex: 1;
+    min-width: 0;
+}
+
+#wo_profile_refresh {
+    flex-shrink: 0;
+    width: auto !important;
+    min-width: unset;
+    padding: 4px 8px;
 }
