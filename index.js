@@ -24,6 +24,8 @@ const EXT = 'wild-offscreen';
 const INJECTION_POSITION = 1;
 
 const DEFAULTS = {
+    maxMessages: 30,
+    maxCharsPerMsg: 2000,
     enabled: true,
     triggerEvery: 5,
     maxEvents: 7,
@@ -375,7 +377,8 @@ function buildSearchRegexes(npc) {
 
 // ── Chat context ───────────────────────────────────────────
 
-function getChatContextForNPC(npc, maxMessages = 30, maxCharsPerMsg = 3000) {    const npcObj = typeof npc === 'string' ? { name: npc, searchKeys: [] } : npc;
+function getChatContextForNPC(npc, maxMessages = 30, maxCharsPerMsg = 3000) {
+    const npcObj = typeof npc === 'string' ? { name: npc, searchKeys: [] } : npc;
     const npcName = npcObj.name;
 
     const debugInfo = {
@@ -411,16 +414,19 @@ function getChatContextForNPC(npc, maxMessages = 30, maxCharsPerMsg = 3000) {   
         debugInfo.mentionCount = mentions.length;
 
         let selected;
+        // Используем переданные параметры maxMessages
         if (mentions.length > 0) {
             selected = mentions.slice(-maxMessages);
             debugInfo.usedMessages = selected.length;
             debugInfo.fallback = false;
         } else {
-            selected = nonSystem.slice(-20); // Увеличиваем до 20
+            // Если упоминаний нет, берем больше сообщений для контекста (fallback)
+            selected = nonSystem.slice(-maxMessages);
             debugInfo.usedMessages = selected.length;
             debugInfo.fallback = true;
         }
 
+        // Формируем текст, используя maxCharsPerMsg для обрезки каждого сообщения
         const text = selected
             .map(m => (m.is_user ? '[User]' : '[Bot]') + ' ' + cleanMsg(m).slice(0, maxCharsPerMsg).trim())
             .join('\n');
@@ -552,10 +558,13 @@ async function generateEventsForAllNPCs(npcs) {
     const sharedChat = (() => {
     try {
         const ctx = SillyTavern.getContext();
+        const lastMsgWithTime = (ctx.chat || []).reverse().find(m => m.mes.includes('2008/11/12')); 
+        const timeInfo = lastMsgWithTime ? lastMsgWithTime.mes.match(/(\d{4}\/\d{2}\/\d{2}.*?) •/)[1] : "Unknown time";
+
         return (ctx.chat || [])
             .filter(m => !m.is_system && m.mes)
-            .slice(-20)
-            .map(m => (m.is_user ? '[User]' : '[Bot]') + ' ' + m.mes.replace(/<[^>]+>/g, '').trim().slice(0, 3000)) // 3000 символов на сообщение
+            .slice(-40)
+            .map(m => (m.is_user ? '[User]' : '[Bot]') + ' ' + m.mes.replace(/<[^>]+>/g, '').trim().slice(0, 3000))
             .join('\n');
     } catch(e) { return ''; }
 })();
@@ -980,12 +989,16 @@ jQuery(async () => {
                 const npcList = enabledNpcs.map(k => ({ npc: npcs[k], key: k, params: rollEventParams() }));
                 const sharedChat = (() => {
                     try {
-                        const ctx = SillyTavern.getContext();
-                        return (ctx.chat || []).filter(m => !m.is_system && m.mes).slice(-5)
-                            .map(m => (m.is_user ? '[User]' : '[Bot]') + ' ' + m.mes.replace(/<[^>]+>/g, '').trim().slice(0, 500))
-                            .join('\n');
-                    } catch(e) { return ''; }
-                })();
+                    const ctx = SillyTavern.getContext();
+                    const lastMsgWithTime = (ctx.chat || []).reverse().find(m => m.mes.includes('2008/11/12')); 
+                    const timeInfo = lastMsgWithTime ? lastMsgWithTime.mes.match(/(\d{4}\/\d{2}\/\d{2}.*?) •/)[1] : "Unknown time";
+                    return (ctx.chat || [])
+                        .filter(m => !m.is_system && m.mes)
+                        .slice(-40)
+                        .map(m => (m.is_user ? '[User]' : '[Bot]') + ' ' + m.mes.replace(/<[^>]+>/g, '').trim().slice(0, 3000))
+                        .join('\n');
+                } catch(e) { return ''; }
+            })();
                 const msgs = buildBatchMessages(npcList, mainInfo, sharedChat);
                 const preview = msgs[1].content.slice(0, 600);
                 panel.append('<div class="wo_debug_entry"><code style="word-break:break-all;font-size:0.78em;">'
