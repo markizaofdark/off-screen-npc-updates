@@ -508,17 +508,17 @@ function getChatContextForNPC(npc, maxMessages = 30, maxCharsPerMsg = 3000) {
 // ── Prompt building ────────────────────────────────────────
 
 const SCALE_DESC = {
-    'minor':   'small but meaningful change',
-    'notable': 'significant event, changes something',
-    'major':   'major event, hard to ignore',
+    'minor':   'MINOR — a small, forgettable moment. A habit, a passing mood, a minor errand. Examples: bought groceries, forgot an umbrella, had a bad coffee, daydreamed about someone.',
+    'notable': 'NOTABLE — something worth remembering that shifts their day or week. A real change, not just a moment. Examples: got into an argument that ended badly, received unexpected news, lost something important, made a decision they've been avoiding, ran into someone they didn't expect.',
+    'major':   'MAJOR — a life-altering event. Something that changes who they are, what they have, or what their future looks like. This is NOT a slightly unusual moment — it must be genuinely significant. Examples: lost their job, found out they're pregnant, witnessed a crime, had a serious accident, received a diagnosis, ended or started a relationship that matters, made an irreversible decision.',
 };
 
 const CATEGORY_DESC = {
-    'Personal':     'personal development, habit, or inner state',
-    'Relationship': 'interaction or shift with another person',
-    'Status':       'change in social, material, or physical status',
-    'Discovery':    'finding out or stumbling upon something',
-    'Social':       'social situation or public event',
+    'Personal':     'Personal — internal state, body, habits, private life. Something happening TO them or WITHIN them, not involving others much.',
+    'Relationship': 'Relationship — a real interaction or shift with a specific other person. Not just thinking about someone — actual contact, conflict, revelation, change in bond.',
+    'Status':       'Status — change in their material, social, legal, or physical standing. Job, money, housing, health, reputation, possessions.',
+    'Discovery':    'Discovery — finding out something they didn't know. Information, a secret, a place, an object, a truth about themselves or someone else.',
+    'Social':       'Social — involvement in a group event, public situation, or community dynamic. Not just being present — actively affected by it.',
 };
 
 function rollEventParams() {
@@ -577,7 +577,11 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext, sceneInfo)
             + 'MENTIONS IN STORY (for context): ' + (npcContext || 'none') + '\n'
             + (inScene
                 ? 'STATUS: THIS CHARACTER IS CURRENTLY IN THE ACTIVE SCENE. DO NOT generate offscreen events.'
-                : 'EVENT REQUIREMENTS: ' + impact + ' | ' + scaleDesc + ' | ' + catDesc);
+                : 'EVENT REQUIREMENTS (STRICT):\n'
+                    + '  Scale: ' + scaleDesc + '\n'
+                    + '  Category: ' + catDesc + '\n'
+                    + '  Tone: ' + impact + ' (must feel ' + (params.isPositive ? 'like a gain, relief, or positive turn' : 'like a loss, setback, or negative development') + ')\n'
+                    + '  Roll: ' + params.roll + '/20 — calibrate intensity accordingly.');
     }).join('\n\n');
 
     // Build scene context header from parsed info-block
@@ -618,12 +622,15 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext, sceneInfo)
         {
             role: 'system',
             content: 'You write brief offscreen event summaries for story characters. '
-                + 'Dry, specific, one sentence per character. No names at sentence start. No dialogue. '
+                + 'Dry, specific, one sentence per character. No names at sentence start. No dialogue. No poetic language. '
                 + 'CRITICAL RULE 1: Each NPC is marked [IN SCENE] or [OFFSCREEN]. '
-                + 'For [IN SCENE] characters: they are physically present in the active scene right now. You MUST write exactly: "[location] | No offscreen events. Currently in scene." — no exceptions, no invented events. '
-                + 'For [OFFSCREEN] characters: they are NOT in the current scene. Generate one offscreen event sentence for them. '
-                + 'CRITICAL RULE 2: For [OFFSCREEN] characters, absolutely DO NOT repeat the same actions, phrasings, or themes from RECENT OFFSCREEN EVENTS. Every new event must be completely unique and distinct. '
-                + 'CRITICAL RULE 3: Follow the exact output format specified. One line per NPC, no extra text.',
+                + 'For [IN SCENE] characters: write exactly: "[location] | No offscreen events. Currently in scene." — no exceptions. '
+                + 'For [OFFSCREEN] characters: generate one offscreen event matching the EVENT REQUIREMENTS exactly. '
+                + 'CRITICAL RULE 2: Scale is MANDATORY. MINOR = trivial moment. NOTABLE = real shift in their day/situation. MAJOR = life-changing — must be genuinely significant, irreversible or deeply impactful. If you write a MAJOR event that sounds like something that happens every day, you have failed. '
+                + 'CRITICAL RULE 3: Category is MANDATORY. Match the category exactly — Personal is internal/private, Relationship requires another person present, Status changes their standing, Discovery means new information, Social means group/public context. '
+                + 'CRITICAL RULE 4: Do NOT downgrade the scale. If the requirement says MAJOR, write something major. Do not write a minor inconvenience and call it major. '
+                + 'CRITICAL RULE 5: No repetition. Every event must be completely different from RECENT OFFSCREEN EVENTS in theme, action, and phrasing. '
+                + 'CRITICAL RULE 6: Follow the exact output format. One line per NPC, no extra commentary.',
         },
         { role: 'user', content: userContent },
     ];
