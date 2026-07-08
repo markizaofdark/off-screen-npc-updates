@@ -212,8 +212,14 @@ function registerNPCs(scanned) {
     const npcs = getNPCs();
     let added = 0;
     for (const { name, description } of scanned) {
-        if (!npcs[name]) { npcs[name] = { name, description, enabled: true, events: [] }; added++; }
-        else npcs[name].description = description;
+        if (!npcs[name]) {
+            npcs[name] = { name, description, enabled: true, events: [], permanentFacts: [] };
+            added++;
+        } else {
+            npcs[name].description = description;
+            // Migrate old NPCs that don't have permanentFacts yet
+            if (!npcs[name].permanentFacts) npcs[name].permanentFacts = [];
+        }
     }
     return { npcs, added };
 }
@@ -536,20 +542,29 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext, sceneInfo)
 
         // Detect if this NPC is currently in the active scene
         let inScene = false;
-        if (sceneInfo && sceneInfo.characters.length > 0) {
+        const sceneChars = (sceneInfo && Array.isArray(sceneInfo.characters)) ? sceneInfo.characters : [];
+        if (sceneChars.length > 0) {
             const npcNameLower = npc.name.toLowerCase();
-            inScene = sceneInfo.characters.some(c => {
-                const cl = c.toLowerCase();
+            const searchKeys = Array.isArray(npc.searchKeys) ? npc.searchKeys : [];
+            inScene = sceneChars.some(c => {
+                if (!c || typeof c !== 'string') return false;
+                const cl = c.toLowerCase().trim();
                 return cl === npcNameLower
                     || cl.includes(npcNameLower)
                     || npcNameLower.includes(cl)
-                    || npc.searchKeys.some(k => k && cl.includes(k.toLowerCase()));
+                    || searchKeys.some(k => k && typeof k === 'string' && cl.includes(k.toLowerCase()));
             });
         }
+
+        const facts = Array.isArray(npc.permanentFacts) ? npc.permanentFacts : [];
+        const factsBlock = facts.length
+            ? facts.map(f => '  [' + (f.positive ? '+' : '-') + 'PERMANENT] ' + f.text).join('\n')
+            : 'None.';
 
         return '--- NPC ' + (i + 1) + ': ' + npc.name + (inScene ? ' [IN SCENE]' : ' [OFFSCREEN]') + ' ---\n'
             + 'DESCRIPTION: ' + npc.description.slice(0, 3000) + '\n'
             + (lastLoc ? lastLoc + '\n' : '')
+            + 'PERMANENT FACTS (always true, never contradict these): ' + (facts.length ? '\n' + factsBlock : 'None.') + '\n'
             + 'RECENT OFFSCREEN EVENTS (do not repeat): ' + history + '\n'
             + 'MENTIONS IN STORY (for context): ' + (npcContext || 'none') + '\n'
             + (inScene
@@ -699,6 +714,23 @@ async function generateEventsForAllNPCs(npcs) {
 
         npc.events.push(event);
         if (npc.events.length > s.maxEvents) npc.events = npc.events.slice(-s.maxEvents);
+
+        // Auto-promote MAJOR events to permanentFacts
+        if (!npc.permanentFacts) npc.permanentFacts = [];
+        if (params.scale.id === 'major') {
+            const factText = result.text;
+            const alreadyStored = npc.permanentFacts.some(f => f.text === factText);
+            if (!alreadyStored) {
+                npc.permanentFacts.push({
+                    text: factText,
+                    category: params.category,
+                    positive: params.isPositive,
+                    timestamp: Date.now(),
+                    auto: true,
+                });
+                console.log('[WildOffscreen] Auto-promoted MAJOR event to permanentFacts for', npc.name);
+            }
+        }
 
         // Обновляем последнюю известную локацию персонажа
         if (result.location && result.location !== 'unknown') {
@@ -864,53 +896,117 @@ function renderNPCList() {
         const evContainer = card.find('.wo_npc_events');
 
 
-        if (!npc.events.length) {
+        if (npc.lastLocation) {
+            evContainer.append('<div class="wo_npc_location">📍 ' + npc.lastLocation + '</div>');
+        }
+
+        // ── Permanent facts section ──────────────────────────────
+        const facts = Array.isArray(npc.permanentFacts) ? npc.permanentFacts : [];
+        if (facts.length) {
+            evContainer.append('<div style="font-size:0.78em;font-weight:700;opacity:0.6;text-transform:uppercase;letter-spacing:0.05em;margin: 6px 0 3px 0;">📌 Permanent facts</div>');
+            facts.forEach((fact, fi) => {
+                const fcolor = fact.positive ? '#66bb6a' : '#ef5350';
+                const autoTag = fact.auto ? ' <span style="opacity:0.4;font-size:0.85em;">(auto)</span>' : '';
+                const fRow = $(`
+                    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;margin-bottom:4px;padding:4px 6px;border-radius:3px;background:color-mix(in srgb, var(--SmartThemeQuoteColor) 8%, transparent);border-left:2px solid color-mix(in srgb, var(--SmartThemeQuoteColor) 40%, transparent);">
+                        <div style="flex:1;font-size:0.82em;">
+                            <span style="color:${fcolor};font-weight:600;">${fact.positive ? '▲' : '▼'} ${fact.category || ''}${autoTag}</span>
+                            <div style="opacity:0.9;line-height:1.4;">${fact.text}</div>
+                        </div>
+                        <button class="wo_btn_delete_fact menu_button" data-fidx="${fi}" title="Remove permanent fact" style="padding:0px 4px;font-size:0.75em;min-width:unset;opacity:0.4;">✕</button>
+                    </div>
+                `);
+                evContainer.append(fRow);
+            });
+        }
+
+        // ── Regular events section ───────────────────────────────
+        if (!npc.events.length && !facts.length) {
             evContainer.append('<div class="wo_no_events">No events yet.</div>');
-        } else {
-            if (npc.lastLocation) {
-                evContainer.append('<div class="wo_npc_location">📍 ' + npc.lastLocation + '</div>');
+        } else if (npc.events.length) {
+            if (facts.length) {
+                evContainer.append('<div style="font-size:0.78em;font-weight:700;opacity:0.6;text-transform:uppercase;letter-spacing:0.05em;margin: 8px 0 3px 0;">🕐 Recent events</div>');
             }
-            
             const reversedEvents = [...npc.events].reverse();
             for (let i = 0; i < reversedEvents.length; i++) {
                 const ev = reversedEvents[i];
-                // Вычисляем настоящий индекс элемента в исходном массиве
                 const originalIndex = npc.events.length - 1 - i;
-                
                 const color = ev.positive ? '#66bb6a' : '#ef5350';
                 const locTag = ev.location && ev.location !== 'unknown'
                     ? '<span class="wo_event_loc">📍 ' + ev.location + '</span>'
                     : '';
                 const evText = typeof ev.text === 'string' ? ev.text : String(ev.text?.text || ev.text || '');
-                
+                const isMajor = ev.scale === 'major';
+                const alreadyFact = facts.some(f => f.text === evText);
+
                 const evRow = $(`
-                    <div class="wo_event" style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 6px;">
-                        <div style="flex: 1;">
-                            <span class="wo_event_meta" style="color:${color}">${ev.positive ? '▲' : '▼'} ${ev.scale.toUpperCase()} · ${ev.category}</span>
+                    <div class="wo_event" style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px;">
+                        <div style="flex:1;">
+                            <span class="wo_event_meta" style="color:${color}">${ev.positive ? '▲' : '▼'} ${ev.scale.toUpperCase()} · ${ev.category}${isMajor ? ' ⭐' : ''}</span>
                             ${locTag}
                             <div class="wo_event_text">${evText}</div>
                         </div>
-                        <button class="wo_btn_delete_event menu_button" data-idx="${originalIndex}" title="Delete this event" style="padding: 0px 4px; font-size: 0.75em; min-width: unset; opacity: 0.5;">✕</button>
+                        <div style="display:flex;flex-direction:column;gap:2px;flex-shrink:0;">
+                            ${alreadyFact ? '' : '<button class="wo_btn_promote_event menu_button" data-idx="' + originalIndex + '" title="Save as permanent fact" style="padding:0px 4px;font-size:0.75em;min-width:unset;opacity:0.55;">📌</button>'}
+                            <button class="wo_btn_delete_event menu_button" data-idx="${originalIndex}" title="Delete this event" style="padding:0px 4px;font-size:0.75em;min-width:unset;opacity:0.4;">✕</button>
+                        </div>
                     </div>
                 `);
                 evContainer.append(evRow);
             }
+        }
 
-            // Обработчик удаления
-            evContainer.find('.wo_btn_delete_event').on('click', async function (e) {
-                e.stopPropagation(); // Чтобы карточка не схлопывалась при клике
-                const idx = parseInt($(this).attr('data-idx'));
-                if (isNaN(idx)) return;
-                
-                const n = getNPCs();
-                if (n[key] && n[key].events) {
-                    n[key].events.splice(idx, 1);
+        // ── Event handlers ───────────────────────────────────────
+        evContainer.find('.wo_btn_delete_fact').on('click', async function (e) {
+            e.stopPropagation();
+            const fi = parseInt($(this).attr('data-fidx'));
+            if (isNaN(fi)) return;
+            const n = getNPCs();
+            if (n[key] && n[key].permanentFacts) {
+                n[key].permanentFacts.splice(fi, 1);
+                await saveNPCs(n);
+                renderNPCList();
+                updateInjection();
+            }
+        });
+
+        evContainer.find('.wo_btn_promote_event').on('click', async function (e) {
+            e.stopPropagation();
+            const idx = parseInt($(this).attr('data-idx'));
+            if (isNaN(idx)) return;
+            const n = getNPCs();
+            if (n[key] && n[key].events && n[key].events[idx]) {
+                const ev = n[key].events[idx];
+                const evText = typeof ev.text === 'string' ? ev.text : String(ev.text?.text || ev.text || '');
+                if (!n[key].permanentFacts) n[key].permanentFacts = [];
+                if (!n[key].permanentFacts.some(f => f.text === evText)) {
+                    n[key].permanentFacts.push({
+                        text: evText,
+                        category: ev.category,
+                        positive: ev.positive,
+                        timestamp: Date.now(),
+                        auto: false,
+                    });
                     await saveNPCs(n);
                     renderNPCList();
                     updateInjection();
+                    toastr.success('Saved as permanent fact.');
                 }
-            });
-        }
+            }
+        });
+
+        evContainer.find('.wo_btn_delete_event').on('click', async function (e) {
+            e.stopPropagation();
+            const idx = parseInt($(this).attr('data-idx'));
+            if (isNaN(idx)) return;
+            const n = getNPCs();
+            if (n[key] && n[key].events) {
+                n[key].events.splice(idx, 1);
+                await saveNPCs(n);
+                renderNPCList();
+                updateInjection();
+            }
+        });
         
         card.find('.wo_npc_header').on('click', function (e) {
             if ($(e.target).closest('.wo_npc_actions').length) return;
