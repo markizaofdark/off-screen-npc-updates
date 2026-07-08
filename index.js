@@ -379,6 +379,7 @@ function parseSceneInfo() {
             ? charPart.split(',').map(s => s.trim()).filter(Boolean)
             : [];
 
+        console.log('[WildOffscreen] parseSceneInfo →', JSON.stringify({ date, time: timePart, location: locPart, characters }));
         return { raw, date, time: timePart, season, location: locPart, characters };
     } catch(e) {
         console.warn('[WildOffscreen] parseSceneInfo error:', e.message);
@@ -549,10 +550,16 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext, sceneInfo)
             inScene = sceneChars.some(c => {
                 if (!c || typeof c !== 'string') return false;
                 const cl = c.toLowerCase().trim();
-                return cl === npcNameLower
-                    || cl.includes(npcNameLower)
-                    || npcNameLower.includes(cl)
-                    || searchKeys.some(k => k && typeof k === 'string' && cl.includes(k.toLowerCase()));
+                // Exact match OR scene char name contains NPC name as whole word (handles "Савелий Парфёнов" vs "Парфёнов")
+                // Deliberately NOT using npcNameLower.includes(cl) — too greedy, causes false positives
+                const exactOrContains = cl === npcNameLower || cl.includes(npcNameLower);
+                // Also check search keys (lorebook keys) for alternative name forms
+                const keyMatch = searchKeys.some(k => {
+                    if (!k || typeof k !== 'string' || k.length < 3) return false;
+                    const kl = k.toLowerCase().trim();
+                    return cl === kl || cl.includes(kl);
+                });
+                return exactOrContains || keyMatch;
             });
         }
 
@@ -561,6 +568,7 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext, sceneInfo)
             ? facts.map(f => '  [' + (f.positive ? '+' : '-') + 'PERMANENT] ' + f.text).join('\n')
             : 'None.';
 
+        console.log('[WildOffscreen] NPC', npc.name, '→', inScene ? '[IN SCENE]' : '[OFFSCREEN]', '| sceneChars:', sceneChars);
         return '--- NPC ' + (i + 1) + ': ' + npc.name + (inScene ? ' [IN SCENE]' : ' [OFFSCREEN]') + ' ---\n'
             + 'DESCRIPTION: ' + npc.description.slice(0, 3000) + '\n'
             + (lastLoc ? lastLoc + '\n' : '')
@@ -639,20 +647,27 @@ function parseBatchResponse(text, count) {
         let sentence = raw;
 
         const pipeIdx = raw.indexOf('|');
-        if (pipeIdx > 0 && pipeIdx < 60) {
+        if (pipeIdx > 0 && pipeIdx < 120) {
             const maybeLocation = raw.slice(0, pipeIdx).trim();
             const maybeEvent = raw.slice(pipeIdx + 1).trim();
-            if (maybeLocation.length > 0 && maybeLocation.length < 50 && !maybeLocation.includes('.') && maybeEvent.length > 10) {
+            if (maybeLocation.length > 0 && maybeLocation.length < 100 && maybeEvent.length > 5) {
                 location = maybeLocation;
                 sentence = maybeEvent;
             }
+        }
+
+        // Detect "currently in scene" marker — don't treat as a real event
+        const inSceneMarker = /no offscreen events|currently in scene/i.test(sentence);
+        if (inSceneMarker) {
+            results.push({ location, text: sentence, inScene: true });
+            continue;
         }
 
         // Take only first sentence
         const first = sentence.match(/^[^.!?]+[.!?]/);
         if (first && first[0].length > 10) sentence = first[0].trim();
 
-        results.push(sentence.length >= 10 ? { location, text: sentence } : null);
+        results.push(sentence.length >= 10 ? { location, text: sentence, inScene: false } : null);
     }
     return results;
 }
@@ -703,8 +718,14 @@ async function generateEventsForAllNPCs(npcs) {
             continue;
         }
 
+        // NPC is currently in scene — don't create an event, just log
+        if (result.inScene) {
+            console.log('[WildOffscreen]', npc.name, 'is in scene — skipping event creation');
+            continue;
+        }
+
         const event = {
-            text: result.text,         // ← строка, не объект
+            text: result.text,
             location: result.location,
             scale: params.scale.id,
             category: params.category,
@@ -732,7 +753,7 @@ async function generateEventsForAllNPCs(npcs) {
             }
         }
 
-        // Обновляем последнюю известную локацию персонажа
+        // Update last known location only for offscreen NPCs
         if (result.location && result.location !== 'unknown') {
             npc.lastLocation = result.location;
         }
@@ -756,10 +777,25 @@ async function runGenerationCycle() {
     try {
         const beforeCounts = Object.fromEntries(keys.map(k => [k, npcs[k].events.length]));
 
+        // Figure out which NPCs are offscreen (expect events) vs in-scene (expect nothing)
+        const sceneInfo = parseSceneInfo();
+        const sceneChars = (sceneInfo && Array.isArray(sceneInfo.characters)) ? sceneInfo.characters : [];
+        const isInScene = (npc) => sceneChars.some(c => {
+            if (!c || typeof c !== 'string') return false;
+            const cl = c.toLowerCase().trim();
+            const nl = npc.name.toLowerCase();
+            const sk = Array.isArray(npc.searchKeys) ? npc.searchKeys : [];
+            return cl === nl || cl.includes(nl) || nl.includes(cl)
+                || sk.some(k => k && typeof k === 'string' && cl.includes(k.toLowerCase()));
+        });
+        const offscreenKeys = keys.filter(k => !isInScene(npcs[k]));
+        const inSceneKeys   = keys.filter(k =>  isInScene(npcs[k]));
+        console.log('[WildOffscreen] Offscreen:', offscreenKeys.length, '| In scene:', inSceneKeys.length);
+
         await generateEventsForAllNPCs(npcs);
-        const firstGenerated = keys.filter(k => npcs[k].events.length > beforeCounts[k]).length;
-        if (firstGenerated === 0) {
-            console.log('[WildOffscreen] First attempt got 0 results, retrying...');
+        const firstGenerated = offscreenKeys.filter(k => npcs[k].events.length > beforeCounts[k]).length;
+        if (firstGenerated === 0 && offscreenKeys.length > 0) {
+            console.log('[WildOffscreen] First attempt got 0 offscreen results, retrying...');
             await new Promise(r => setTimeout(r, 1500));
             await generateEventsForAllNPCs(npcs);
         }
@@ -768,15 +804,18 @@ async function runGenerationCycle() {
         updateInjection();
         renderNPCList();
 
-        const generated = keys.filter(k => npcs[k].events.length > beforeCounts[k]).length;
-        const failed = keys.length - generated;
+        const generated = offscreenKeys.filter(k => npcs[k].events.length > beforeCounts[k]).length;
+        const failed = offscreenKeys.length - generated;
 
-        if (generated === 0) {
+        if (offscreenKeys.length === 0 && inSceneKeys.length > 0) {
+            toastr.info(`All ${inSceneKeys.length} NPC(s) are currently in scene — no offscreen events generated.`);
+        } else if (generated === 0 && offscreenKeys.length > 0) {
             toastr.error('Generation failed. Check your connection profile and model.');
         } else if (failed > 0) {
-            toastr.warning(`Generated events for ${generated}/${keys.length} NPCs.`);
+            toastr.warning(`Generated events for ${generated}/${offscreenKeys.length} offscreen NPCs.`);
         } else {
-            toastr.success(`Generated events for all ${generated} NPCs in one request.`);
+            const inSceneNote = inSceneKeys.length ? ` (${inSceneKeys.length} in scene, skipped)` : '';
+            toastr.success(`Generated events for all ${generated} offscreen NPCs.` + inSceneNote);
         }
     } catch(e) {
         console.error('[WildOffscreen] runGenerationCycle error:', e.message);
