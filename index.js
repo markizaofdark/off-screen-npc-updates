@@ -44,6 +44,7 @@ const SCALE = [
 // ── State ──────────────────────────────────────────────────
 
 let msgCounter = 0;
+let lastChatLength = 0;  // tracks chat size to detect rerolls
 
 // ── Settings ───────────────────────────────────────────────
 
@@ -683,6 +684,36 @@ function updateInjection() {
 function onGenerationStarted() {
     const s = getSettings();
     if (!s.enabled) return;
+
+    try {
+        const ctx = SillyTavern.getContext();
+        const currentLength = (ctx.chat || []).length;
+        const isReroll = currentLength === lastChatLength && currentLength > 0;
+        lastChatLength = currentLength;
+
+        if (isReroll) {
+            // Reroll detected: pop the last event from each enabled NPC and regenerate
+            console.log('[WildOffscreen] Reroll detected — removing last events and regenerating');
+            const npcs = getNPCs();
+            let removed = 0;
+            for (const key of Object.keys(npcs)) {
+                if (npcs[key].enabled && npcs[key].events.length > 0) {
+                    npcs[key].events.pop();
+                    removed++;
+                }
+            }
+            if (removed > 0) {
+                saveNPCs(npcs).then(() => {
+                    renderNPCList();
+                    updateInjection();
+                });
+                msgCounter = s.triggerEvery; // force generation on this turn
+            }
+        }
+    } catch(e) {
+        console.warn('[WildOffscreen] onGenerationStarted error:', e.message);
+    }
+
     msgCounter++;
     if (msgCounter >= s.triggerEvery) { msgCounter = 0; runGenerationCycle(); }
     updateInjection();
@@ -858,12 +889,32 @@ jQuery(async () => {
     $('#wo_max_messages').val(s.maxMessages || 30);
     $('#wo_max_chars').val(s.maxCharsPerMsg || 2000);
 
+    function extractDateFromMessage(mes) {
+        if (!mes) return null;
+        // Try to pull full content from the styled info div
+        const divMatch = mes.match(/<div[^>]+border-left[^>]*>([\s\S]*?)<\/div>/i);
+        if (divMatch) {
+            const inner = divMatch[1].replace(/<[^>]+>/g, '').trim();
+            if (/\d{4}\/\d{2}\/\d{2}/.test(inner)) return inner;
+        }
+        // Fallback: grab date + time from raw stripped text
+        const raw = mes.replace(/<[^>]+>/g, '');
+        const withTime = raw.match(/(\d{4}\/\d{2}\/\d{2}[^\u2022\n]*\u2022[^\u2022\n]*)/);
+        if (withTime) return withTime[1].trim();
+        const dateOnly = raw.match(/(\d{4}\/\d{2}\/\d{2})/);
+        return dateOnly ? dateOnly[1] : null;
+    }
+
     function updateDateDisplay() {
-        const ctx = SillyTavern.getContext();
-        const chat = ctx.chat || [];
-        const lastMsgWithTime = [...chat].reverse().find(m => m.mes && /\d{4}\/\d{2}\/\d{2}/.test(m.mes));
-        const match = lastMsgWithTime ? lastMsgWithTime.mes.match(/(\d{4}\/\d{2}\/\d{2})/) : null;
-        $('#wo_date_display').text(match ? match[1] : 'No date found in history');
+        try {
+            const ctx = SillyTavern.getContext();
+            const chat = ctx.chat || [];
+            const lastMsg = [...chat].reverse().find(m => m.mes && /\d{4}\/\d{2}\/\d{2}/.test(m.mes));
+            const dateStr = lastMsg ? extractDateFromMessage(lastMsg.mes) : null;
+            $('#wo_date_display').text(dateStr || 'No date found in history');
+        } catch(e) {
+            $('#wo_date_display').text('—');
+        }
     }
 
     updateDateDisplay();
@@ -1040,11 +1091,25 @@ jQuery(async () => {
     eventSource.on(event_types.GENERATION_STARTED, onGenerationStarted);
     eventSource.on(event_types.CHAT_CHANGED, () => {
         msgCounter = 0;
+        lastChatLength = 0;
         setTimeout(() => {
+            try {
+                const ctx = SillyTavern.getContext();
+                lastChatLength = (ctx.chat || []).length;
+            } catch(e) {}
             renderNPCList();
             updateInjection();
+            updateDateDisplay();
             $('#wo_book_info').text('Bot: ' + getBotKey());
         }, 200);
+    });
+
+    // Also update date display whenever a new message is rendered
+    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, () => {
+        updateDateDisplay();
+    });
+    eventSource.on(event_types.USER_MESSAGE_RENDERED, () => {
+        updateDateDisplay();
     });
 
     updateInjection();
