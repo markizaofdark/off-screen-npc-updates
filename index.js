@@ -1673,6 +1673,7 @@ function buildUI() {
 
                     <div class="wo_actions" style="margin-top:6px;">
                         <button id="wo_generate_now" class="menu_button"><i class="fa-solid fa-bolt"></i> Generate Now</button>
+                        <button id="wo_scan" class="menu_button"><i class="fa-solid fa-magnifying-glass"></i> Scan Lorebook</button>
                     </div>
                     <div class="wo_actions" style="margin-top:4px;">
                         <button id="wo_clear_all_events" class="menu_button"><i class="fa-solid fa-eraser"></i> Clear All Events</button>
@@ -1707,9 +1708,6 @@ function buildUI() {
                         <option value="before_char">before_char</option>
                         <option value="after_char">after_char</option>
                     </select>
-                    <div class="wo_actions">
-                        <button id="wo_scan" class="menu_button"><i class="fa-solid fa-magnifying-glass"></i> Scan Lorebook</button>
-                    </div>
                     <div class="wo_section_label">Token Context</div>
                     <label><small>Messages history depth</small></label>
                     <input type="number" id="wo_max_messages" class="text_pole" value="${s.maxMessages || 30}" />
