@@ -323,6 +323,21 @@ function getScale(roll) { return SCALE.find(s => roll >= s.min && roll <= s.max)
 function getCategory() { return CATEGORIES[Math.floor(Math.random() * CATEGORIES.length)]; }
 
 /**
+ * Get main character (bot) name and description
+ */
+function getMainCharInfo() {
+    try {
+        const ctx = SillyTavern.getContext();
+        const char = ctx.characters?.[ctx.characterId];
+        if (!char) return '';
+        const name = char.name || '';
+        const desc = [char.description, char.personality, char.scenario]
+            .filter(Boolean).join('\n').trim().slice(0, 2000);
+        return name ? 'MAIN CHARACTER: ' + name + '\n' + desc : '';
+    } catch (e) { return ''; }
+}
+
+/**
  * Get chat messages mentioning the NPC by name.
  * Takes up to maxMessages most recent matches, each truncated to maxCharsPerMsg.
  * Falls back to last 5 messages if no mentions found.
@@ -366,118 +381,165 @@ function getChatContextForNPC(npcName, maxMessages = 8, maxCharsPerMsg = 2000) {
     }
 }
 
-function buildMessages(npc, scale, category, isPositive) {
-    const history = npc.events.slice(-3).map(e => '- ' + e.text).join('\n') || 'None yet.';
-    const desc = npc.description.slice(0, 6000);
-    const impact = isPositive ? 'positive' : 'negative';
-    const recentChat = getChatContextForNPC(npc.name);
+const SCALE_DESC = {
+    'minor':   'small but meaningful change',
+    'notable': 'significant event, changes something',
+    'major':   'major event, hard to ignore',
+};
 
-    // Event type descriptions for clarity
-    const scaleDesc = {
-        'minor':   'small but meaningful',
-        'notable': 'significant, changes something',
-        'major':   'major, hard to ignore',
-    }[scale.id] || scale.label;
+const CATEGORY_DESC = {
+    'Personal':     'personal development, habit, or inner state',
+    'Relationship': 'interaction or shift with another person',
+    'Status':       'change in social, material, or physical status',
+    'Discovery':    'finding out or stumbling upon something',
+    'Social':       'social situation or public event',
+};
 
-    const categoryDesc = {
-        'Personal':     'personal development or habit',
-        'Relationship': 'interaction or change with another person',
-        'Status':       'change in social/material/physical status',
-        'Discovery':    'finding out or stumbling upon something',
-        'Social':       'social situation or public event',
-    }[category] || category;
-
-    console.log('[WildOffscreen] Prompt for', npc.name,
-        '| desc:', desc.length, 'chars',
-        '| history:', history,
-        '| chat context:', recentChat.length, 'chars',
-        '| scale:', scale.label, '| cat:', category, '| impact:', impact);
-
-    return [
-        {
-            role: 'system',
-            content: 'You write single-sentence offscreen event logs for story characters. '
-                + 'One sentence only. Dry, specific, grounded in the character. '
-                + 'No character name at the start. No dialogue. No poetic language.',
-        },
-        {
-            role: 'user',
-            content: 'CHARACTER: ' + npc.name + '\n'
-                + 'PERSONALITY & BACKGROUND: ' + desc + '\n'
-                + 'THEIR RECENT OFFSCREEN EVENTS (do not repeat): ' + history + '\n'
-                + (recentChat ? 'CURRENT STORY CONTEXT (last messages, for location/mood/plot reference):\n' + recentChat + '\n' : '')
-                + '\nWrite ONE sentence (15-25 words) describing what ' + npc.name + ' just did or experienced offscreen.'
-                + '\nEvent must be:'
-                + '\n- ' + impact.toUpperCase() + ' in outcome for them'
-                + '\n- Scale: ' + scaleDesc
-                + '\n- Type: ' + categoryDesc
-                + '\n- Consistent with their personality, current location, and the ongoing story'
-                + '\n- Specific, not generic'
-                + '\n\nOne sentence only. Start with a verb or situation, not their name.',
-        },
-    ];
-}
-
-async function generateEventForNPC(npc) {
+/**
+ * Roll event params for one NPC
+ */
+function rollEventParams() {
     const roll = rollD20();
     const scale = getScale(roll);
     const category = getCategory();
     const isPositive = roll % 2 === 0;
-    const messages = buildMessages(npc, scale, category, isPositive);
-    let text = await callAPI(messages);
-    console.log('[WildOffscreen] Raw generated text for', npc.name, ':', JSON.stringify(text));
-    if (!text) return null;
+    return { roll, scale, category, isPositive };
+}
 
-    // Only strip obvious meta-prefixes, not anything that could be content
-    text = text
-        .replace(/^```[\s\S]*?```$/m, t => t.replace(/^```\w*\n?/, '').replace(/\n?```$/, ''))
-        .replace(/^(two sentences|output|event text|result)[:\s]+/i, '')
-        .trim();
+/**
+ * Build a BATCH request for all NPCs at once.
+ * Returns messages array + metadata array for parsing results.
+ */
+function buildBatchMessages(npcList, mainCharInfo, sharedChatContext) {
+    const npcBlocks = npcList.map((item, i) => {
+        const { npc, params } = item;
+        const history = npc.events.slice(-3).map(e => '- ' + e.text).join('\n') || 'None yet.';
+        const impact = params.isPositive ? 'POSITIVE' : 'NEGATIVE';
+        const scaleDesc = SCALE_DESC[params.scale.id] || params.scale.label;
+        const catDesc = CATEGORY_DESC[params.category] || params.category;
+        const npcContext = getChatContextForNPC(npc.name);
 
-    // If result is suspiciously short (just a name or empty), skip
-    if (text.length < 10) {
-        console.warn('[WildOffscreen] Generated text too short for', npc.name, '- raw was:', JSON.stringify(text));
-        return null;
+        return '--- NPC ' + (i + 1) + ': ' + npc.name + ' ---\n'
+            + 'DESCRIPTION: ' + npc.description.slice(0, 3000) + '\n'
+            + 'RECENT OFFSCREEN EVENTS (do not repeat): ' + history + '\n'
+            + 'MENTIONS IN STORY (for location/context): ' + (npcContext || 'none') + '\n'
+            + 'EVENT REQUIREMENTS: ' + impact + ' | ' + scaleDesc + ' | ' + catDesc;
+    }).join('\n\n');
+
+    const userContent = (mainCharInfo ? mainCharInfo + '\n\n' : '')
+        + 'CURRENT STORY CONTEXT:\n' + (sharedChatContext || 'none') + '\n\n'
+        + npcBlocks + '\n\n'
+        + 'For each NPC above, write exactly ONE sentence (15-25 words) describing what they just did or experienced offscreen.\n'
+        + 'Requirements for each sentence:\n'
+        + '- Match the event requirements (impact/scale/type) listed for that NPC\n'
+        + '- Be specific to their personality and situation\n'
+        + '- Do NOT start with their name\n'
+        + '- No dialogue, no poetic language\n\n'
+        + 'Respond with ONLY this format, one line per NPC:\n'
+        + npcList.map((item, i) => 'NPC' + (i + 1) + ': [event sentence]').join('\n');
+
+    console.log('[WildOffscreen] Batch prompt for', npcList.length, 'NPCs, userContent length:', userContent.length);
+
+    return [
+        {
+            role: 'system',
+            content: 'You write brief offscreen event summaries for story characters. '
+                + 'Dry, specific, one sentence per character. No names at sentence start. No dialogue.',
+        },
+        { role: 'user', content: userContent },
+    ];
+}
+
+/**
+ * Parse batch response — expects lines like "NPC1: ...", "NPC2: ..." etc.
+ */
+function parseBatchResponse(text, count) {
+    const results = [];
+    for (let i = 1; i <= count; i++) {
+        const regex = new RegExp('NPC' + i + '[:\s]+(.+?)(?=NPC' + (i+1) + '[:\s]|$)', 'si');
+        const match = text.match(regex);
+        let sentence = match ? match[1].trim() : '';
+        // Take only first sentence if model wrote more
+        const first = sentence.match(/^[^.!?]+[.!?]/);
+        if (first && first[0].length > 10) sentence = first[0].trim();
+        results.push(sentence.length >= 10 ? sentence : null);
     }
+    return results;
+}
 
-    // Trim to first sentence if model wrote more than one
-    const firstSentence = text.match(/^[^.!?]+[.!?]/);
-    if (firstSentence && firstSentence[0].length > 10) {
-        text = firstSentence[0].trim();
+/**
+ * Generate events for ALL enabled NPCs in a single API call.
+ */
+async function generateEventsForAllNPCs(npcs) {
+    const keys = Object.keys(npcs).filter(k => npcs[k].enabled);
+    if (!keys.length) return;
+
+    const mainCharInfo = getMainCharInfo();
+    // Shared recent chat (last 5 msgs) as general story context
+    const sharedChat = (() => {
+        try {
+            const ctx = SillyTavern.getContext();
+            return (ctx.chat || [])
+                .filter(m => !m.is_system && m.mes)
+                .slice(-5)
+                .map(m => (m.is_user ? '[User]' : '[Bot]') + ' ' + m.mes.replace(/<[^>]+>/g, '').trim().slice(0, 500))
+                .join('\n');
+        } catch(e) { return ''; }
+    })();
+
+    // Roll params for each NPC
+    const npcList = keys.map(k => ({ npc: npcs[k], key: k, params: rollEventParams() }));
+
+    // Build and send single batch request
+    const messages = buildBatchMessages(npcList, mainCharInfo, sharedChat);
+    const rawText = await callAPI(messages);
+    console.log('[WildOffscreen] Batch response:', rawText?.slice(0, 500));
+
+    if (!rawText) return;
+
+    const sentences = parseBatchResponse(rawText, npcList.length);
+    const s = getSettings();
+
+    for (let i = 0; i < npcList.length; i++) {
+        const { npc, key, params } = npcList[i];
+        const text = sentences[i];
+        if (!text) {
+            console.warn('[WildOffscreen] No result for', npc.name, '- skipping');
+            continue;
+        }
+        const event = { text, scale: params.scale.id, category: params.category, positive: params.isPositive, timestamp: Date.now() };
+        npc.events.push(event);
+        if (npc.events.length > s.maxEvents) npc.events = npc.events.slice(-s.maxEvents);
+        console.log('[WildOffscreen] Event for', npc.name, ':', text);
     }
-
-    return { text, scale: scale.id, category, positive: isPositive, timestamp: Date.now() };
 }
 
 async function runGenerationCycle() {
     const npcs = getNPCs();
-    const s = getSettings();
     const keys = Object.keys(npcs).filter(k => npcs[k].enabled);
     if (!keys.length) return;
 
     $('#wo_status').text('Generating offscreen events…').show();
-    let generated = 0, failed = 0;
 
-    for (const key of keys) {
-        const npc = npcs[key];
-        const event = await generateEventForNPC(npc);
-        if (!event) { failed++; continue; }
-        npc.events.push(event);
-        if (npc.events.length > s.maxEvents) npc.events = npc.events.slice(-s.maxEvents);
-        generated++;
-    }
+    const beforeCounts = Object.fromEntries(keys.map(k => [k, npcs[k].events.length]));
+
+    // Single batch request for all NPCs
+    await generateEventsForAllNPCs(npcs);
 
     await saveNPCs(npcs);
     updateInjection();
     renderNPCList();
     $('#wo_status').text('').hide();
 
-    if (generated === 0 && failed > 0) {
-        toastr.error('Generation failed. Check API URL, key and model in settings.');
+    const generated = keys.filter(k => npcs[k].events.length > beforeCounts[k]).length;
+    const failed = keys.length - generated;
+
+    if (generated === 0) {
+        toastr.error('Generation failed. Check your connection profile and model.');
     } else if (failed > 0) {
-        toastr.warning(`Generated ${generated} events, ${failed} failed.`);
+        toastr.warning(`Generated events for ${generated}/${keys.length} NPCs.`);
     } else {
-        toastr.success(`Generated ${generated} offscreen events.`);
+        toastr.success(`Generated events for all ${generated} NPCs in one request.`);
     }
 }
 
