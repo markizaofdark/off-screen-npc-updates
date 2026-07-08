@@ -237,6 +237,56 @@ function getDefaultProfileName() {
 }
 
 /**
+ * Call API with custom options (e.g. higher max_tokens for regex generation)
+ */
+async function callAPIWithOptions(messages, options = {}) {
+    const s = getSettings();
+    const ctx = SillyTavern.getContext();
+    const profiles = getConnectionProfiles();
+    if (!profiles.length) return null;
+
+    const profileName = s.connectionProfile || getDefaultProfileName();
+    const profile = profiles.find(p => p.name === profileName) || profiles[0];
+    if (!profile) return null;
+
+    const apiName = profile.api || 'openai';
+    const cc_source = apiName === 'google' ? 'makersuite' : apiName;
+
+    const generate_data = {
+        messages,
+        model: profile.model || '',
+        temperature: 0.2,  // low temp for structured output
+        max_tokens: options.max_tokens || 600,
+        stream: false,
+        chat_completion_source: cc_source,
+    };
+
+    if (profile['secret-id']) generate_data['secret_id'] = profile['secret-id'];
+    if (cc_source === 'custom' && profile['api-url']) {
+        generate_data['custom_url'] = profile['api-url'].trim().replace(/\/+$/, '');
+    }
+    if (cc_source === 'makersuite' || cc_source === 'claude') {
+        generate_data['use_sysprompt'] = true;
+    }
+
+    try {
+        const r = await fetch('/api/backends/chat-completions/generate', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify(generate_data),
+        });
+        const text = await r.text();
+        if (!r.ok) { console.error('[WildOffscreen] callAPIWithOptions error:', r.status, text.slice(0, 200)); return null; }
+        const data = JSON.parse(text);
+        if (cc_source === 'claude') return data?.content?.[0]?.text?.trim() || null;
+        return data?.choices?.[0]?.message?.content?.trim() || null;
+    } catch(e) {
+        console.error('[WildOffscreen] callAPIWithOptions fetch error:', e.message);
+        return null;
+    }
+}
+
+/**
  * Call ST's own backend using the selected Connection Profile.
  * Mirrors ExtBlocks ApiService.generateBlocks() pattern exactly.
  */
@@ -426,37 +476,62 @@ function buildSearchRegexes(npc) {
  * Ask the model to generate Russian morphology regexes for an NPC name.
  */
 async function generateRegexesForNPC(npcName) {
+    // Split name into parts for concise prompt — fewer tokens needed
+    const parts = npcName.trim().split(/\s+/).filter(p => p.length > 1);
+
     const messages = [
         {
             role: 'system',
-            content: 'You are a regex expert. Generate JavaScript regex patterns for Russian morphology. Output only valid JSON, nothing else.',
+            content: 'You generate compact JavaScript regex strings for Russian name morphology. Respond with a raw JSON array only — no markdown, no explanation.',
         },
         {
             role: 'user',
-            content: 'Generate regex patterns for all Russian case forms of the name/word: "' + npcName + '"\n'
-                + 'Rules:\n'
-                + '- Each regex must match word boundaries (not inside other words)\n'
-                + '- Use pattern: /(?:^|[^а-яёА-ЯЁ])STEM(?:endings)?(?=[^а-яёА-ЯЁ]|$)/gi\n'
-                + '- Generate one regex per distinct stem (first name, last name, nickname separately)\n'
-                + '- Output ONLY a JSON array of regex strings, e.g.: ["/(?:^|[^а-яёА-ЯЁ])[Аа]ндре[а-яё]*(?=[^а-яёА-ЯЁ]|$)/gi"]\n'
-                + '- No explanation, no markdown, just the JSON array.',
+            content: 'Name parts to cover: ' + parts.join(', ') + '\n'
+                + 'For each part, write ONE regex string covering all Russian case endings.\n'
+                + 'Pattern template: "/(?:^|[^а-яёА-ЯЁ])[Хх]ер(?:а|у|ом|е|а)?(?=[^а-яёА-ЯЁ]|$)/gi"\n'
+                + 'Rules: word boundaries, case-insensitive, one regex per name part.\n'
+                + 'Output: ["regex1","regex2"] — raw JSON array, no markdown blocks.',
         },
     ];
 
-    const text = await callAPI(messages);
+    // Use higher token limit for regex generation
+    const text = await callAPIWithOptions(messages, { max_tokens: 600 });
     if (!text) return null;
 
+    console.log('[WildOffscreen] Raw regex response:', text.slice(0, 400));
+
     try {
-        const clean = text.replace(/^```[\w]*\n?/, '').replace(/\n?```$/, '').trim();
+        // Strip markdown fences if model added them
+        let clean = text
+            .replace(/^```[\w]*\s*/m, '')
+            .replace(/\s*```$/m, '')
+            .trim();
+
+        // If response is truncated (no closing bracket), try to repair
+        if (!clean.endsWith(']')) {
+            // Remove last incomplete entry and close the array
+            clean = clean.replace(/,\s*"[^"]*$/, '').trim();
+            if (!clean.endsWith(']')) clean += ']';
+        }
+
         const arr = JSON.parse(clean);
         if (!Array.isArray(arr)) return null;
-        // Validate each entry is a working regex string
-        return arr.filter(r => {
+
+        // Validate each entry parses as regex
+        const valid = arr.filter(r => {
             if (typeof r !== 'string') return false;
-            try { parseRegexKey(r); return true; } catch(e) { return false; }
+            const rx = parseRegexKey(r);
+            if (!rx) {
+                console.warn('[WildOffscreen] Invalid regex skipped:', r);
+                return false;
+            }
+            return true;
         });
+
+        console.log('[WildOffscreen] Valid regexes:', valid);
+        return valid.length ? valid : null;
     } catch(e) {
-        console.error('[WildOffscreen] Failed to parse regex JSON:', e.message, text.slice(0, 200));
+        console.error('[WildOffscreen] Failed to parse regex response:', e.message, '| raw:', text.slice(0, 300));
         return null;
     }
 }
@@ -631,16 +706,34 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext) {
 /**
  * Parse batch response — expects lines like "NPC1: ...", "NPC2: ..." etc.
  */
+/**
+ * Parse batch response. Expected format per line:
+ *   NPC1: location | event sentence
+ * Returns array of { location, text } or null per NPC.
+ */
 function parseBatchResponse(text, count) {
     const results = [];
     for (let i = 1; i <= count; i++) {
         const regex = new RegExp('NPC' + i + '[:\s]+(.+?)(?=NPC' + (i+1) + '[:\s]|$)', 'si');
         const match = text.match(regex);
-        let sentence = match ? match[1].trim() : '';
-        // Take only first sentence if model wrote more
+        if (!match) { results.push(null); continue; }
+
+        let raw = match[1].trim();
+        let location = 'unknown';
+        let sentence = raw;
+
+        // Split by pipe: "location | event"
+        const pipeIdx = raw.indexOf('|');
+        if (pipeIdx > 0) {
+            location = raw.slice(0, pipeIdx).trim();
+            sentence = raw.slice(pipeIdx + 1).trim();
+        }
+
+        // Take only first sentence
         const first = sentence.match(/^[^.!?]+[.!?]/);
         if (first && first[0].length > 10) sentence = first[0].trim();
-        results.push(sentence.length >= 10 ? sentence : null);
+
+        results.push(sentence.length >= 10 ? { location, text: sentence } : null);
     }
     return results;
 }
@@ -734,8 +827,12 @@ function buildInjectionText(npcs, injectMax) {
     }
     if (!filtered.length) return '';
     const lines = filtered.map(npc => {
-        const evLines = npc.events.slice(-3).map(e => '  [' + (e.positive ? '+' : '-') + e.scale.toUpperCase() + '] ' + e.text).join('\n');
-        return '• ' + npc.name + ':\n' + evLines;
+        const loc = npc.lastLocation || 'unknown';
+        const evLines = npc.events.slice(-3).map(e => {
+            const evLoc = e.location && e.location !== loc ? ' @' + e.location : '';
+            return '  [' + (e.positive ? '+' : '-') + e.scale.toUpperCase() + evLoc + '] ' + e.text;
+        }).join('\n');
+        return '• ' + npc.name + ' (currently: ' + loc + '):\n' + evLines;
     });
     return '[OFF-SCREEN NPC UPDATES — use when character enters scene. Do NOT generate this block yourself.]\n'
         + lines.join('\n') + '\n[/OFF-SCREEN NPC UPDATES]';
@@ -775,7 +872,7 @@ function renderNPCList() {
         <div class="wo_npc_card ${npc.enabled ? '' : 'wo_npc_disabled'}" data-name="${key}">
             <div class="wo_npc_header">
                 <span class="wo_npc_name">${npc.name}</span>
-                <span class="wo_npc_count">${count} event${count !== 1 ? 's' : ''}</span>
+                <span class="wo_npc_count">${npc.lastLocation ? '📍 ' : ''}${count} event${count !== 1 ? 's' : ''}</span>
                 <div class="wo_npc_actions">
                     <button class="wo_btn_regex menu_button" title="Generate morphology regexes for this NPC">⚙</button>
                     <button class="wo_btn_toggle menu_button">${npc.enabled ? '⏸' : '▶'}</button>
@@ -789,12 +886,18 @@ function renderNPCList() {
         if (!npc.events.length) {
             evContainer.append('<div class="wo_no_events">No events yet.</div>');
         } else {
+            // Show current location if known
+            if (npc.lastLocation) {
+                evContainer.append('<div class="wo_npc_location">📍 ' + npc.lastLocation + '</div>');
+            }
             for (const ev of [...npc.events].reverse()) {
                 const color = ev.positive ? '#66bb6a' : '#ef5350';
-                evContainer.append(`<div class="wo_event">
-                    <span class="wo_event_meta" style="color:${color}">${ev.positive ? '▲' : '▼'} ${ev.scale.toUpperCase()} · ${ev.category}</span>
-                    <div class="wo_event_text">${ev.text}</div>
-                </div>`);
+                const locTag = ev.location && ev.location !== 'unknown' ? '<span class="wo_event_loc">📍 ' + ev.location + '</span> ' : '';
+                evContainer.append('<div class="wo_event">'
+                    + '<span class="wo_event_meta" style="color:' + color + '">' + (ev.positive ? '▲' : '▼') + ' ' + ev.scale.toUpperCase() + ' · ' + ev.category + '</span>'
+                    + locTag
+                    + '<div class="wo_event_text">' + ev.text + '</div>'
+                    + '</div>');
             }
         }
         card.find('.wo_npc_header').on('click', function (e) {

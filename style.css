@@ -185,3 +185,18 @@
     border-radius: 3px;
     font-size: 0.9em;
 }
+
+/* NPC location */
+.wo_npc_location {
+    font-size: 0.8em;
+    opacity: 0.6;
+    padding: 3px 0 5px 0;
+    font-style: italic;
+}
+
+.wo_event_loc {
+    font-size: 0.75em;
+    opacity: 0.55;
+    display: block;
+    margin-bottom: 1px;
+}
