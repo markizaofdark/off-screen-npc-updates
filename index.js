@@ -1,3 +1,8 @@
+/**
+ * Wild Offscreen — SillyTavern Extension
+ * Tracks offscreen NPC lives: generates events via OpenAI-compatible API.
+ */
+
 'use strict';
 
 import { extension_settings, saveMetadataDebounced } from '../../../extensions.js';
@@ -23,7 +28,7 @@ const DEFAULTS = {
     triggerEvery: 5,
     maxEvents: 7,
     injectMaxMessages: 0,
-    connectionProfile: '', // ST Connection Profile name
+    connectionProfile: '',
     maxTokens: 200,
 };
 
@@ -211,17 +216,11 @@ function registerNPCs(scanned) {
 
 // ── API call ───────────────────────────────────────────────
 
-/**
- * Get ST connection profiles list
- */
 function getConnectionProfiles() {
     const ctx = SillyTavern.getContext();
     return ctx.extensionSettings?.connectionManager?.profiles || [];
 }
 
-/**
- * Get currently selected ST connection profile name
- */
 function getDefaultProfileName() {
     const ctx = SillyTavern.getContext();
     const cm = ctx.extensionSettings?.connectionManager;
@@ -231,64 +230,8 @@ function getDefaultProfileName() {
         || '';
 }
 
-/**
- * Call API with custom options (e.g. higher max_tokens for regex generation)
- */
-async function callAPIWithOptions(messages, options = {}) {
-    const s = getSettings();
-    const ctx = SillyTavern.getContext();
-    const profiles = getConnectionProfiles();
-    if (!profiles.length) return null;
-
-    const profileName = s.connectionProfile || getDefaultProfileName();
-    const profile = profiles.find(p => p.name === profileName) || profiles[0];
-    if (!profile) return null;
-
-    const apiName = profile.api || 'openai';
-    const cc_source = apiName === 'google' ? 'makersuite' : apiName;
-
-    const generate_data = {
-        messages,
-        model: profile.model || '',
-        temperature: 1.0, // Немного увеличим для вариативности
-        frequency_penalty: 0.7, // Штраф за повторение токенов и фраз
-        max_tokens: 200,
-        stream: false,
-        chat_completion_source: cc_source,
-    };
-
-    if (profile['secret-id']) generate_data['secret_id'] = profile['secret-id'];
-    if (cc_source === 'custom' && profile['api-url']) {
-        generate_data['custom_url'] = profile['api-url'].trim().replace(/\/+$/, '');
-    }
-    if (cc_source === 'makersuite' || cc_source === 'claude') {
-        generate_data['use_sysprompt'] = true;
-    }
-
-    try {
-        const r = await fetch('/api/backends/chat-completions/generate', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify(generate_data),
-        });
-        const text = await r.text();
-        if (!r.ok) { console.error('[WildOffscreen] callAPIWithOptions error:', r.status, text.slice(0, 200)); return null; }
-        const data = JSON.parse(text);
-        if (cc_source === 'claude') return data?.content?.[0]?.text?.trim() || null;
-        return data?.choices?.[0]?.message?.content?.trim() || null;
-    } catch(e) {
-        console.error('[WildOffscreen] callAPIWithOptions fetch error:', e.message);
-        return null;
-    }
-}
-
-/**
- * Call ST's own backend using the selected Connection Profile.
- * Mirrors ExtBlocks ApiService.generateBlocks() pattern exactly.
- */
 async function callAPI(messages) {
     const s = getSettings();
-    const ctx = SillyTavern.getContext();
     const profiles = getConnectionProfiles();
 
     if (!profiles.length) {
@@ -296,7 +239,6 @@ async function callAPI(messages) {
         return null;
     }
 
-    // Pick the selected profile
     const profileName = s.connectionProfile || getDefaultProfileName();
     const profile = profiles.find(p => p.name === profileName) || profiles[0];
 
@@ -305,7 +247,6 @@ async function callAPI(messages) {
         return null;
     }
 
-    // Map ST API names (same as ExtBlocks does)
     const apiName = profile.api || 'openai';
     const cc_source = apiName === 'google' ? 'makersuite' : apiName;
 
@@ -318,22 +259,13 @@ async function callAPI(messages) {
         chat_completion_source: cc_source,
     };
 
-    // Handle secret-id for some providers
-    if (profile['secret-id']) {
-        generate_data['secret_id'] = profile['secret-id'];
-    }
-
-    // Custom URL for custom API type
+    if (profile['secret-id']) generate_data['secret_id'] = profile['secret-id'];
     if (cc_source === 'custom' && profile['api-url']) {
         generate_data['custom_url'] = profile['api-url'].trim().replace(/\/+$/, '');
     }
-
-    // Vertex AI region
     if (cc_source === 'vertexai' && profile['api-url']) {
         generate_data['vertexai_region'] = profile['api-url'];
     }
-
-    // Use sysprompt for Claude and Gemini
     if (cc_source === 'makersuite' || cc_source === 'claude') {
         generate_data['use_sysprompt'] = true;
     }
@@ -356,8 +288,6 @@ async function callAPI(messages) {
         }
 
         const data = JSON.parse(text);
-
-        // Extract text based on source format (mirrors ExtBlocks extractMessageFromData)
         if (cc_source === 'claude') {
             return data?.content?.[0]?.text?.trim() || null;
         } else {
@@ -375,9 +305,6 @@ function rollD20() { return Math.floor(Math.random() * 20) + 1; }
 function getScale(roll) { return SCALE.find(s => roll >= s.min && roll <= s.max) || SCALE[0]; }
 function getCategory() { return CATEGORIES[Math.floor(Math.random() * CATEGORIES.length)]; }
 
-/**
- * Get main character (bot) name and description
- */
 function getMainCharInfo() {
     try {
         const ctx = SillyTavern.getContext();
@@ -390,26 +317,14 @@ function getMainCharInfo() {
     } catch (e) { return ''; }
 }
 
-/**
- * Get chat messages mentioning the NPC by name.
- * Takes up to maxMessages most recent matches, each truncated to maxCharsPerMsg.
- * Falls back to last 5 messages if no mentions found.
- */
-/**
- * Parse a regex string from lorebook key (e.g. "/pattern/flags")
- * Returns RegExp or null if not a regex pattern.
- */
+// ── Search helpers (used for context lookup, NOT for regex gen) ────────────
+
 function parseRegexKey(key) {
     const m = key.match(/^\/(.+)\/([gimsuy]*)$/);
     if (!m) return null;
     try { return new RegExp(m[1], m[2] || 'i'); } catch(e) { return null; }
 }
 
-/**
- * Build a simple stem regex for a Russian/Latin word.
- * Matches word boundary + stem + any Cyrillic/Latin ending.
- * Pattern mirrors the example: /(?:^|[^а-яёА-ЯЁ])Стем(?:endings)?(?=[^а-яёА-ЯЁ]|$)/
- */
 function buildStemRegex(word) {
     word = word.trim();
     if (!word || word.length < 2) return null;
@@ -424,13 +339,6 @@ function buildStemRegex(word) {
     } catch(e) { return null; }
 }
 
-/**
- * Build search regexes for one NPC.
- * Priority:
- *   1. Regex keys from lorebook (most precise — set by "Generate Regexes" button)
- *   2. Plain-text keys from lorebook (stem-matched)
- *   3. Name parts as fallback
- */
 function buildSearchRegexes(npc) {
     const results = [];
     const seen = new Set();
@@ -444,20 +352,17 @@ function buildSearchRegexes(npc) {
 
     const keys = npc.searchKeys || [];
 
-    // Pass 1: proper regex keys (e.g. "/Андре[а-яё]*/i")
     for (const k of keys) {
         const rx = parseRegexKey(k);
         if (rx) addRegex(k, rx);
     }
 
-    // Pass 2: plain text keys → stem regex
     for (const k of keys) {
         if (!parseRegexKey(k) && k && k.length > 1) {
             addRegex(k, buildStemRegex(k));
         }
     }
 
-    // Pass 3: name parts fallback
     const nameParts = npc.name.trim().split(/\s+/).filter(p => p.length > 2);
     for (const p of nameParts) {
         addRegex(p, buildStemRegex(p));
@@ -466,110 +371,9 @@ function buildSearchRegexes(npc) {
     return results;
 }
 
-// ── Regex generation via AI ────────────────────────────────
+// ── Chat context ───────────────────────────────────────────
 
-/**
- * Ask the model to generate Russian morphology regexes for an NPC name.
- */
-async function generateRegexesForNPC(npcName) {
-    // Split name into parts for concise prompt — fewer tokens needed
-    const parts = npcName.trim().split(/\s+/).filter(p => p.length > 1);
-
-    const messages = [
-        {
-            role: 'system',
-            content: 'You generate compact JavaScript regex strings for Russian name morphology. Respond with a raw JSON array only — no markdown, no explanation.',
-        },
-        {
-            role: 'user',
-            content: 'Name parts to cover: ' + parts.join(', ') + '\n'
-                + 'For each part, write ONE regex string covering all Russian case endings.\n'
-                + 'Pattern template: "/(?:^|[^а-яёА-ЯЁ])[Хх]ер(?:а|у|ом|е|а)?(?=[^а-яёА-ЯЁ]|$)/gi"\n'
-                + 'Rules: word boundaries, case-insensitive, one regex per name part.\n'
-                + 'Output: ["regex1","regex2"] — raw JSON array, no markdown blocks.',
-        },
-    ];
-
-    // Use higher token limit for regex generation
-    const text = await callAPIWithOptions(messages, { max_tokens: 600 });
-    if (!text) return null;
-
-    console.log('[WildOffscreen] Raw regex response:', text.slice(0, 400));
-
-    try {
-        // Strip markdown fences if model added them
-        let clean = text
-            .replace(/^```[\w]*\s*/m, '')
-            .replace(/\s*```$/m, '')
-            .trim();
-
-        // If response is truncated (no closing bracket), try to repair
-        if (!clean.endsWith(']')) {
-            // Remove last incomplete entry and close the array
-            clean = clean.replace(/,\s*"[^"]*$/, '').trim();
-            if (!clean.endsWith(']')) clean += ']';
-        }
-
-        const arr = JSON.parse(clean);
-        if (!Array.isArray(arr)) return null;
-
-        // Validate each entry parses as regex
-        const valid = arr.filter(r => {
-            if (typeof r !== 'string') return false;
-            const rx = parseRegexKey(r);
-            if (!rx) {
-                console.warn('[WildOffscreen] Invalid regex skipped:', r);
-                return false;
-            }
-            return true;
-        });
-
-        console.log('[WildOffscreen] Valid regexes:', valid);
-        return valid.length ? valid : null;
-    } catch(e) {
-        console.error('[WildOffscreen] Failed to parse regex response:', e.message, '| raw:', text.slice(0, 300));
-        return null;
-    }
-}
-
-/**
- * Save updated keys back to the lorebook via ST API.
- */
-async function saveRegexesToLorebook(bookName, entryUid, newKeys) {
-    // First fetch the full lorebook
-    const baseHeaders = getRequestHeaders();
-    const r = await fetch('/api/worldinfo/get', {
-        method: 'POST',
-        headers: { ...baseHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: bookName }),
-    });
-    if (!r.ok) throw new Error('Failed to fetch lorebook: ' + r.status);
-    const data = await r.json();
-
-    // Update the entry keys
-    const entry = data.entries?.[entryUid] || data.entries?.[String(entryUid)];
-    if (!entry) throw new Error('Entry uid ' + entryUid + ' not found in lorebook');
-
-    // Merge new regex keys with existing, avoid duplicates
-    const existing = Array.isArray(entry.key) ? entry.key : [entry.key].filter(Boolean);
-    const merged = [...new Set([...existing, ...newKeys])];
-    entry.key = merged;
-
-    // Save back
-    const saveR = await fetch('/api/worldinfo/import', {
-        method: 'POST',
-        headers: { ...baseHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: bookName, data }),
-    });
-    if (!saveR.ok) throw new Error('Failed to save lorebook: ' + saveR.status);
-    return merged;
-}
-
-/**
- * Returns { text, debug } — context string + debug info object
- */
 function getChatContextForNPC(npc, maxMessages = 8, maxCharsPerMsg = 2000) {
-    // Accept either NPC object or plain name string (backward compat)
     const npcObj = typeof npc === 'string' ? { name: npc, searchKeys: [] } : npc;
     const npcName = npcObj.name;
 
@@ -628,6 +432,8 @@ function getChatContextForNPC(npc, maxMessages = 8, maxCharsPerMsg = 2000) {
     }
 }
 
+// ── Prompt building ────────────────────────────────────────
+
 const SCALE_DESC = {
     'minor':   'small but meaningful change',
     'notable': 'significant event, changes something',
@@ -642,9 +448,6 @@ const CATEGORY_DESC = {
     'Social':       'social situation or public event',
 };
 
-/**
- * Roll event params for one NPC
- */
 function rollEventParams() {
     const roll = rollD20();
     const scale = getScale(roll);
@@ -653,10 +456,6 @@ function rollEventParams() {
     return { roll, scale, category, isPositive };
 }
 
-/**
- * Build a BATCH request for all NPCs at once.
- * Returns messages array + metadata array for parsing results.
- */
 function buildBatchMessages(npcList, mainCharInfo, sharedChatContext) {
     const npcBlocks = npcList.map((item, i) => {
         const { npc, params } = item;
@@ -666,11 +465,13 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext) {
         const catDesc = CATEGORY_DESC[params.category] || params.category;
         const npcContextResult = getChatContextForNPC(npc);
         const npcContext = npcContextResult.text;
+        const lastLoc = npc.lastLocation ? 'Last known location: ' + npc.lastLocation : '';
 
         return '--- NPC ' + (i + 1) + ': ' + npc.name + ' ---\n'
             + 'DESCRIPTION: ' + npc.description.slice(0, 3000) + '\n'
+            + (lastLoc ? lastLoc + '\n' : '')
             + 'RECENT OFFSCREEN EVENTS (do not repeat): ' + history + '\n'
-            + 'MENTIONS IN STORY (for location/context): ' + (npcContext || 'none') + '\n'  
+            + 'MENTIONS IN STORY (for context): ' + (npcContext || 'none') + '\n'
             + 'EVENT REQUIREMENTS: ' + impact + ' | ' + scaleDesc + ' | ' + catDesc;
     }).join('\n\n');
 
@@ -684,8 +485,10 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext) {
         + '- Be specific to their personality and situation\n'
         + '- Do NOT start with their name\n'
         + '- No dialogue, no poetic language\n\n'
+        + 'Also determine a short location name (1-5 words) for where this NPC currently is.\n\n'
         + 'Respond with ONLY this format, one line per NPC:\n'
-        + npcList.map((item, i) => 'NPC' + (i + 1) + ': [event sentence]').join('\n');
+        + npcList.map((item, i) => 'NPC' + (i + 1) + ': [location] | [event sentence]').join('\n') + '\n'
+        + 'Example: NPC1: the marketplace | She haggled bitterly over a bag of spices with an impatient merchant.';
 
     console.log('[WildOffscreen] Batch prompt for', npcList.length, 'NPCs, userContent length:', userContent.length);
 
@@ -693,39 +496,31 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext) {
         {
             role: 'system',
             content: 'You write brief offscreen event summaries for story characters. '
-                + 'Dry, specific, one sentence per character. No names at sentence start. No dialogue. '
-                + 'CRITICAL: Review the "RECENT OFFSCREEN EVENTS" for each NPC and absolutely DO NOT repeat the same actions, phrasings, themes, or situations. Every new event must be completely different from previous ones.',
+                + 'Dry, specific, one sentence per character. No names at sentence start. No dialogue.',
         },
         { role: 'user', content: userContent },
     ];
 }
 
 /**
- * Parse batch response — expects lines like "NPC1: ...", "NPC2: ..." etc.
- */
-/**
- * Parse batch response. Expected format per line:
- *   NPC1: location | event sentence
+ * Parse batch response.
+ * Expected format per line: NPC1: [location] | [event sentence]
  * Returns array of { location, text } or null per NPC.
  */
 function parseBatchResponse(text, count) {
     const results = [];
     for (let i = 1; i <= count; i++) {
-        const regex = new RegExp('NPC' + i + '[:\s]+(.+?)(?=NPC' + (i+1) + '[:\s]|$)', 'si');
+        const regex = new RegExp('NPC' + i + '[:\\s]+(.+?)(?=NPC' + (i + 1) + '[:\\s]|$)', 'si');
         const match = text.match(regex);
         if (!match) { results.push(null); continue; }
 
-        let raw = match[1].trim();
-        // Remove any leading/trailing quotes the model might add
-        raw = raw.replace(/^["']|["']$/g, '').trim();
+        let raw = match[1].trim().replace(/^["']|["']$/g, '').trim();
 
         let location = 'unknown';
         let sentence = raw;
 
-        // Try to split by pipe: "location | event"
         const pipeIdx = raw.indexOf('|');
         if (pipeIdx > 0 && pipeIdx < 60) {
-            // Only treat as location|event if left side looks like a location (short, no period)
             const maybeLocation = raw.slice(0, pipeIdx).trim();
             const maybeEvent = raw.slice(pipeIdx + 1).trim();
             if (maybeLocation.length > 0 && maybeLocation.length < 50 && !maybeLocation.includes('.') && maybeEvent.length > 10) {
@@ -738,18 +533,19 @@ function parseBatchResponse(text, count) {
         const first = sentence.match(/^[^.!?]+[.!?]/);
         if (first && first[0].length > 10) sentence = first[0].trim();
 
-        // Always return { location, text } — never raw object in UI
         results.push(sentence.length >= 10 ? { location, text: sentence } : null);
     }
     return results;
 }
 
+/**
+ * Generate events for ALL enabled NPCs in a single API call.
+ */
 async function generateEventsForAllNPCs(npcs) {
     const keys = Object.keys(npcs).filter(k => npcs[k].enabled);
     if (!keys.length) return;
 
     const mainCharInfo = getMainCharInfo();
-    // Shared recent chat (last 5 msgs) as general story context
     const sharedChat = (() => {
         try {
             const ctx = SillyTavern.getContext();
@@ -761,35 +557,48 @@ async function generateEventsForAllNPCs(npcs) {
         } catch(e) { return ''; }
     })();
 
-    // Roll params for each NPC
     const npcList = keys.map(k => ({ npc: npcs[k], key: k, params: rollEventParams() }));
 
-    // Build and send single batch request
     const messages = buildBatchMessages(npcList, mainCharInfo, sharedChat);
     const rawText = await callAPI(messages);
     console.log('[WildOffscreen] Batch response:', rawText?.slice(0, 500));
 
     if (!rawText) return;
 
-    const sentences = parseBatchResponse(rawText, npcList.length);
+    const parsed = parseBatchResponse(rawText, npcList.length);
     const s = getSettings();
 
     for (let i = 0; i < npcList.length; i++) {
         const { npc, key, params } = npcList[i];
-        const text = sentences[i];
-        if (!text) {
+        const result = parsed[i]; // { location, text } or null
+
+        if (!result) {
             console.warn('[WildOffscreen] No result for', npc.name, '- skipping');
             continue;
         }
-        const event = { text, scale: params.scale.id, category: params.category, positive: params.isPositive, timestamp: Date.now() };
+
+        const event = {
+            text: result.text,         // ← строка, не объект
+            location: result.location,
+            scale: params.scale.id,
+            category: params.category,
+            positive: params.isPositive,
+            timestamp: Date.now(),
+        };
+
         npc.events.push(event);
         if (npc.events.length > s.maxEvents) npc.events = npc.events.slice(-s.maxEvents);
-        console.log('[WildOffscreen] Event for', npc.name, ':', text);
+
+        // Обновляем последнюю известную локацию персонажа
+        if (result.location && result.location !== 'unknown') {
+            npc.lastLocation = result.location;
+        }
+
+        console.log('[WildOffscreen] Event for', npc.name, '@', result.location, ':', result.text);
     }
 }
 
-async function runGenerationCycle() 
-{
+async function runGenerationCycle() {
     const npcs = getNPCs();
     const keys = Object.keys(npcs).filter(k => npcs[k].enabled);
     if (!keys.length) return;
@@ -798,7 +607,6 @@ async function runGenerationCycle()
 
     const beforeCounts = Object.fromEntries(keys.map(k => [k, npcs[k].events.length]));
 
-    // Single batch request — retry once on failure
     await generateEventsForAllNPCs(npcs);
     const firstGenerated = keys.filter(k => npcs[k].events.length > beforeCounts[k]).length;
     if (firstGenerated === 0) {
@@ -826,8 +634,7 @@ async function runGenerationCycle()
 
 // ── Injection ──────────────────────────────────────────────
 
-function buildInjectionText(npcs, injectMax) 
-{
+function buildInjectionText(npcs, injectMax) {
     const entries = Object.values(npcs).filter(n => n.enabled && n.events.length > 0);
     if (!entries.length) return '';
     let filtered = entries;
@@ -849,8 +656,7 @@ function buildInjectionText(npcs, injectMax)
         + lines.join('\n') + '\n[/OFF-SCREEN NPC UPDATES]';
 }
 
-function updateInjection() 
-{
+function updateInjection() {
     const s = getSettings();
     const text = s.enabled ? buildInjectionText(getNPCs(), s.injectMaxMessages) : '';
     setExtensionPrompt(EXT, text, INJECTION_POSITION, 0, false, 0);
@@ -858,8 +664,7 @@ function updateInjection()
 
 // ── Generation hook ────────────────────────────────────────
 
-function onGenerationStarted() 
-{
+function onGenerationStarted() {
     const s = getSettings();
     if (!s.enabled) return;
     msgCounter++;
@@ -869,8 +674,7 @@ function onGenerationStarted()
 
 // ── UI ─────────────────────────────────────────────────────
 
-function renderNPCList() 
-{
+function renderNPCList() {
     const npcs = getNPCs();
     const container = $('#wo_npc_list');
     container.empty();
@@ -888,7 +692,6 @@ function renderNPCList()
                 <span class="wo_npc_name">${npc.name}</span>
                 <span class="wo_npc_count">${npc.lastLocation ? '📍 ' : ''}${count} event${count !== 1 ? 's' : ''}</span>
                 <div class="wo_npc_actions">
-                    <button class="wo_btn_regex menu_button" title="Generate morphology regexes for this NPC">⚙</button>
                     <button class="wo_btn_toggle menu_button">${npc.enabled ? '⏸' : '▶'}</button>
                     <button class="wo_btn_clear menu_button">🗑</button>
                     <button class="wo_btn_delete menu_button">✕</button>
@@ -897,100 +700,32 @@ function renderNPCList()
             <div class="wo_npc_events" style="display:none;"></div>
         </div>`);
         const evContainer = card.find('.wo_npc_events');
-
-
         if (!npc.events.length) {
             evContainer.append('<div class="wo_no_events">No events yet.</div>');
         } else {
             if (npc.lastLocation) {
                 evContainer.append('<div class="wo_npc_location">📍 ' + npc.lastLocation + '</div>');
             }
-
-            const reversedEvents = [...npc.events].reverse();
-            
-            for (let i = 0; i < reversedEvents.length; i++) {
-                const ev = reversedEvents[i];
-                const originalIndex = npc.events.length - 1 - i; 
-                
+            for (const ev of [...npc.events].reverse()) {
                 const color = ev.positive ? '#66bb6a' : '#ef5350';
-                const locTag = ev.location && ev.location !== 'unknown' ? '<span class="wo_event_loc">📍 ' + ev.location + '</span> ' : '';
-                const evText = typeof ev.text === 'string' ? ev.text : String(ev.text || '');
-                
-                const evRow = $(`
-                    <div class="wo_event" style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 6px;">
-                        <div style="flex: 1;">
-                            <span class="wo_event_meta" style="color:${color}">${ev.positive ? '▲' : '▼'} ${ev.scale.toUpperCase()} · ${ev.category}</span>
-                            ${locTag}
-                            <div class="wo_event_text">${evText}</div>
-                        </div>
-                        <button class="wo_btn_delete_event menu_button" data-idx="${originalIndex}" title="Delete this event" style="padding: 0px 4px; font-size: 0.75em; min-width: unset; opacity: 0.5;">✕</button>
-                    </div>
-                `);
-                
-                evContainer.append(evRow);
+                const locTag = ev.location && ev.location !== 'unknown'
+                    ? '<span class="wo_event_loc">📍 ' + ev.location + '</span>'
+                    : '';
+                // ev.text всегда строка после фикса
+                const evText = typeof ev.text === 'string' ? ev.text : String(ev.text?.text || ev.text || '');
+                evContainer.append('<div class="wo_event">'
+                    + '<span class="wo_event_meta" style="color:' + color + '">'
+                    + (ev.positive ? '▲' : '▼') + ' ' + ev.scale.toUpperCase() + ' · ' + ev.category
+                    + '</span>'
+                    + locTag
+                    + '<div class="wo_event_text">' + evText + '</div>'
+                    + '</div>');
             }
-
-            // Обработчик удаления
-            evContainer.find('.wo_btn_delete_event').on('click', async function (e) {
-                e.stopPropagation();
-                
-                const idx = parseInt($(this).attr('data-idx'));
-                if (isNaN(idx)) return;
-                
-                const npcs = extension_settings.wild_offscreen.npcs;
-                if (npcs[npcId] && npcs[npcId].events) {
-                    npcs[npcId].events.splice(idx, 1);
-                    
-                    saveSettingsDebounced();
-                    renderNPCList();
-                    updateContextInjections();
-                }
-            });
         }
-
         card.find('.wo_npc_header').on('click', function (e) {
             if ($(e.target).closest('.wo_npc_actions').length) return;
             evContainer.slideToggle(150);
         });
-        card.find('.wo_btn_regex').on('click', async () => {
-            const btn = card.find('.wo_btn_regex');
-            btn.prop('disabled', true).text('…');
-
-            try {
-                const regexes = await generateRegexesForNPC(npc.name);
-                if (!regexes || !regexes.length) {
-                    toastr.error('Failed to generate regexes for ' + npc.name);
-                    return;
-                }
-
-                // Update in-memory searchKeys immediately
-                const n = getNPCs();
-                if (!n[key]) return;
-                const existing = n[key].searchKeys || [];
-                n[key].searchKeys = [...new Set([...existing, ...regexes])];
-                await saveNPCs(n);
-
-                // Save to lorebook if we have the info
-                if (npc.lorebookName && npc.entryUid !== null) {
-                    try {
-                        const merged = await saveRegexesToLorebook(npc.lorebookName, npc.entryUid, regexes);
-                        toastr.success('Regexes saved to lorebook for ' + npc.name + ' (' + regexes.length + ' added)');
-                        console.log('[WildOffscreen] Saved keys for', npc.name, ':', merged);
-                    } catch(e) {
-                        toastr.warning('Regexes saved in memory but lorebook save failed: ' + e.message);
-                        console.error('[WildOffscreen] Lorebook save error:', e);
-                    }
-                } else {
-                    toastr.success('Regexes generated for ' + npc.name + ' (no lorebook — saved in memory only)');
-                    console.log('[WildOffscreen] Generated regexes for', npc.name, ':', regexes);
-                }
-
-                renderNPCList();
-            } finally {
-                btn.prop('disabled', false).text('⚙');
-            }
-        });
-
         card.find('.wo_btn_toggle').on('click', async () => {
             const n = getNPCs(); n[key].enabled = !n[key].enabled;
             await saveNPCs(n); renderNPCList(); updateInjection();
@@ -1009,8 +744,7 @@ function renderNPCList()
     }
 }
 
-function buildUI() 
-{
+function buildUI() {
     const html = `
     <div id="wo_panel" class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
@@ -1060,8 +794,7 @@ function buildUI()
 
 // ── Init ───────────────────────────────────────────────────
 
-jQuery(async () => 
-{
+jQuery(async () => {
     buildUI();
     const s = getSettings();
 
@@ -1070,7 +803,6 @@ jQuery(async () =>
     $('#wo_max_events').val(s.maxEvents);
     $('#wo_inject_max').val(s.injectMaxMessages);
 
-    // Populate profile selector
     function refreshProfileSelect() {
         const profiles = getConnectionProfiles();
         const select = $('#wo_profile_select');
@@ -1083,7 +815,6 @@ jQuery(async () =>
         for (const p of profiles) {
             select.append(`<option value="${p.name}" ${p.name === currentName ? 'selected' : ''}>${p.name} (${p.api || '?'} / ${p.model || 'no model'})</option>`);
         }
-        // Save current selection
         if (!s.connectionProfile) {
             s.connectionProfile = currentName;
             saveSettingsDebounced();
@@ -1092,8 +823,6 @@ jQuery(async () =>
 
     refreshProfileSelect();
     renderNPCList();
-
-    // ── Settings handlers ──
 
     $('#wo_toggle').on('change', function () { s.enabled = this.checked; saveSettingsDebounced(); updateInjection(); });
 
@@ -1111,7 +840,6 @@ jQuery(async () =>
     $('#wo_max_events').on('input', function () { s.maxEvents = parseInt(this.value) || DEFAULTS.maxEvents; saveSettingsDebounced(); });
     $('#wo_inject_max').on('input', function () { s.injectMaxMessages = parseInt(this.value) || 0; saveSettingsDebounced(); });
 
-    // ── Scan ──
     $('#wo_scan').on('click', async () => {
         $('#wo_status').text('Scanning…').show();
         try {
@@ -1130,7 +858,6 @@ jQuery(async () =>
         $('#wo_status').hide();
     });
 
-    // ── Load JSON ──
     $('#wo_file_input').on('change', async function () {
         const file = this.files?.[0]; if (!file) return;
         try {
@@ -1145,7 +872,6 @@ jQuery(async () =>
         this.value = '';
     });
 
-    // ── Generate now ──
     $('#wo_generate_now').on('click', async () => {
         if (!getConnectionProfiles().length) {
             toastr.error('No ST Connection Profiles found. Create one in SillyTavern settings first.');
@@ -1154,7 +880,6 @@ jQuery(async () =>
         await runGenerationCycle();
     });
 
-    // ── Debug button ──
     $('#wo_debug_btn').on('click', () => {
         const panel = $('#wo_debug_panel');
         panel.empty().show();
@@ -1164,10 +889,8 @@ jQuery(async () =>
         const s = getSettings();
         const mainInfo = getMainCharInfo();
 
-        // Header
         panel.append('<div class="wo_debug_title">🔎 Wild Offscreen Debug</div>');
 
-        // Settings
         panel.append('<div class="wo_debug_title" style="margin-top:8px;">Settings</div>');
         panel.append('<div class="wo_debug_entry">'
             + 'Profile: <code>' + (s.connectionProfile || 'default') + '</code><br>'
@@ -1175,13 +898,11 @@ jQuery(async () =>
             + 'Max events/NPC: <code>' + s.maxEvents + '</code>'
             + '</div>');
 
-        // Main char
         panel.append('<div class="wo_debug_title" style="margin-top:8px;">Main character (bot)</div>');
         panel.append('<div class="wo_debug_entry">'
             + (mainInfo ? '<code>' + mainInfo.slice(0, 200) + (mainInfo.length > 200 ? '…' : '') + '</code>' : '<span style="color:#ef5350">Not found</span>')
             + '</div>');
 
-        // Chat stats
         try {
             const ctx = SillyTavern.getContext();
             const chat = ctx.chat || [];
@@ -1195,7 +916,6 @@ jQuery(async () =>
             panel.append('<div class="wo_debug_entry" style="color:#ef5350">Chat error: ' + e.message + '</div>');
         }
 
-        // Per-NPC context debug
         if (!keys.length) {
             panel.append('<div class="wo_debug_entry" style="color:#ef5350">No NPCs registered.</div>');
         } else {
@@ -1208,11 +928,13 @@ jQuery(async () =>
                 panel.append('<div class="wo_debug_entry">'
                     + '<b>' + npc.name + '</b>'
                     + (npc.enabled ? '' : ' <span style="color:#ef5350">[disabled]</span>') + '<br>'
-                    + 'Search terms: <code>' + d.searchTerms.join(', ') + '</code><br>'  + 'Regexes: <code>' + d.searchRegexes.join(' | ') + '</code><br>'
+                    + 'Search terms: <code>' + d.searchTerms.join(', ') + '</code><br>'
+                    + 'Regexes: <code>' + d.searchRegexes.join(' | ') + '</code><br>'
                     + 'Chat scanned: <code>' + d.nonSystemMessages + ' msgs</code><br>'
                     + 'Mentions found: <code style="color:' + statusColor + '">' + d.mentionCount + '</code><br>'
                     + 'Used in prompt: <code>' + d.usedMessages + ' msgs</code>'
                     + (d.fallback ? ' <span style="color:#ffa726">(fallback — no mentions)</span>' : '') + '<br>'
+                    + 'Last location: <code>' + (npc.lastLocation || 'not set') + '</code><br>'
                     + 'Lorebook desc: <code>' + npc.description.length + ' chars</code><br>'
                     + 'Stored events: <code>' + npc.events.length + '</code>'
                     + (d.error ? '<br><span style="color:#ef5350">Error: ' + d.error + '</span>' : '')
@@ -1220,7 +942,6 @@ jQuery(async () =>
             }
         }
 
-        // Batch prompt preview
         panel.append('<div class="wo_debug_title" style="margin-top:8px;">Batch prompt preview (first 600 chars)</div>');
         try {
             const enabledNpcs = keys.filter(k => npcs[k].enabled);
@@ -1248,7 +969,6 @@ jQuery(async () =>
         }
     });
 
-    // ── Hooks ──
     eventSource.on(event_types.GENERATION_STARTED, onGenerationStarted);
     eventSource.on(event_types.CHAT_CHANGED, () => {
         msgCounter = 0;
@@ -1260,5 +980,4 @@ jQuery(async () =>
     });
 
     updateInjection();
-}
-);
+});

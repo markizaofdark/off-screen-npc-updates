@@ -200,9 +200,3 @@
     display: block;
     margin-bottom: 1px;
 }
-
-.wo_btn_delete_event:hover {
-    opacity: 1 !important;
-    background: var(--SmartThemeErrorColor) !important;
-    color: #fff;
-}
