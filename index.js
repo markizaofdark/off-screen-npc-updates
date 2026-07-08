@@ -33,7 +33,7 @@ const DEFAULTS = {
     connectionProfile: '',
     maxTokens: 200,
     outputLanguage: 'en',
-    scanAfterChar: false,
+    scanPosition: 'before_char',
 };
 
 const LANGUAGE_INSTRUCTION = {
@@ -606,46 +606,19 @@ async function fetchBookEntries(bookName) {
 async function scanCharacterLorebooks() {
     const bookNames = getCharacterLorebookNames();
     const s = getSettings();
-    console.log('[WildOffscreen] Books found:', bookNames, '| scanAfterChar:', s.scanAfterChar);
+    const mode = s.scanPosition || 'before_char';
+    console.log('[WildOffscreen] Books found:', bookNames, '| scanPosition:', mode);
 
     const npcs = [];
-    const afterCharExtras = {}; // name → [extra content strings]
-
     for (const bookName of bookNames) {
         const entries = await fetchBookEntries(bookName);
         console.log(`[WildOffscreen] "${bookName}": ${entries.length} entries`);
-
         for (const entry of entries) {
-            // Primary scan: before_char / character keyword
-            if (isNPCEntry(entry, 'before_char')) {
-                const info = extractNPCInfo(entry, bookName);
-                if (info) { npcs.push(info); console.log(`[WildOffscreen]   ✓ ${info.name}`); }
-            }
-            // Secondary scan: after_char entries (if enabled)
-            if (s.scanAfterChar && isNPCEntry(entry, 'after_char')) {
-                const name = (entry.comment || entry.name || '').trim();
-                const content = (entry.content || '').trim();
-                if (name && content) {
-                    if (!afterCharExtras[name]) afterCharExtras[name] = [];
-                    afterCharExtras[name].push(content);
-                    console.log(`[WildOffscreen]   + after_char for "${name}": ${content.slice(0, 60)}…`);
-                }
-            }
+            if (!isNPCEntry(entry, mode)) continue;
+            const info = extractNPCInfo(entry, bookName);
+            if (info) { npcs.push(info); console.log(`[WildOffscreen]   ✓ ${info.name}`); }
         }
     }
-
-    // Merge after_char content into matching NPCs
-    if (s.scanAfterChar) {
-        for (const npc of npcs) {
-            const extras = afterCharExtras[npc.name];
-            if (extras && extras.length) {
-                npc.description = npc.description
-                    ? npc.description + '\n\n' + extras.join('\n\n')
-                    : extras.join('\n\n');
-            }
-        }
-    }
-
     return { npcs, bookNames };
 }
 
@@ -675,32 +648,13 @@ function parseLorebookJSON(data) {
     }
     console.log('[WildOffscreen] parseLorebookJSON: found', entries.length, 'raw entries');
     const s = getSettings();
+    const mode = s.scanPosition || 'before_char';
     const found = [];
-    const afterCharExtras = {};
     for (const e of entries) {
         if (!e || typeof e !== 'object') continue;
-        if (isNPCEntry(e, 'before_char')) {
-            const info = extractNPCInfo(e, '');
-            if (info) found.push(info);
-        }
-        if (s.scanAfterChar && isNPCEntry(e, 'after_char')) {
-            const name = (e.comment || e.name || '').trim();
-            const ec = (e.content || '').trim();
-            if (name && ec) {
-                if (!afterCharExtras[name]) afterCharExtras[name] = [];
-                afterCharExtras[name].push(ec);
-            }
-        }
-    }
-    if (s.scanAfterChar) {
-        for (const npc of found) {
-            const extras = afterCharExtras[npc.name];
-            if (extras?.length) {
-                npc.description = npc.description
-                    ? npc.description + '\n\n' + extras.join('\n\n')
-                    : extras.join('\n\n');
-            }
-        }
+        if (!isNPCEntry(e, mode)) continue;
+        const info = extractNPCInfo(e, '');
+        if (info) found.push(info);
     }
     return found;
 }
@@ -1635,10 +1589,11 @@ function buildUI() {
 
             <div class="wo_section_label">Lorebook</div>
             <div id="wo_book_info" class="wo_book_info">—</div>
-            <label class="checkbox_label" style="margin-bottom:4px;">
-                <input type="checkbox" id="wo_scan_after_char" />
-                <span style="font-size:0.85em;">Include <code>after_char</code> entries (relationships, notes)</span>
-            </label>
+            <label><small>Scan entries at position</small></label>
+            <select id="wo_scan_position" class="text_pole" style="margin-bottom:6px;">
+                <option value="before_char">before_char (character cards)</option>
+                <option value="after_char">after_char (relationships, notes)</option>
+            </select>
             <div class="wo_actions">
                 <button id="wo_scan" class="menu_button"><i class="fa-solid fa-magnifying-glass"></i> Scan Lorebook</button>
             </div>
@@ -1767,8 +1722,8 @@ jQuery(async () => {
         updateLangButtons();
     });
 
-    $('#wo_scan_after_char').prop('checked', s.scanAfterChar || false);
-    $('#wo_scan_after_char').on('change', function () { s.scanAfterChar = this.checked; saveSettingsDebounced(); });
+    $('#wo_scan_position').val(s.scanPosition || 'before_char');
+    $('#wo_scan_position').on('change', function () { s.scanPosition = this.value; saveSettingsDebounced(); });
 
     $('#wo_toggle').on('change', function () { s.enabled = this.checked; saveSettingsDebounced(); updateInjection(); });
     $('#wo_profile_select').on('change', function () { s.connectionProfile = this.value; saveSettingsDebounced(); });
