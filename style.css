@@ -313,3 +313,106 @@ button.menu_button {
 .wo_lang_btn:hover {
     opacity: 0.8;
 }
+
+/* ── Accordion sections ─────────────────────────────── */
+
+.wo_accordion {
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor) 15%, transparent);
+    border-radius: 4px;
+    margin: 4px 0;
+    overflow: hidden;
+}
+
+.wo_accordion_header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    cursor: pointer;
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 5%, transparent);
+    user-select: none;
+    font-weight: 600;
+    font-size: 0.88em;
+    gap: 8px;
+}
+
+.wo_accordion_header:hover {
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 10%, transparent);
+}
+
+.wo_accordion_header span {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+
+.wo_accordion_header i.fa-solid:not(.wo_acc_icon) {
+    opacity: 0.7;
+    font-size: 0.9em;
+}
+
+.wo_acc_icon {
+    font-size: 0.75em;
+    opacity: 0.5;
+    transition: transform 0.2s ease;
+    flex-shrink: 0;
+}
+
+.wo_acc_icon.wo_acc_open {
+    transform: rotate(180deg);
+}
+
+.wo_accordion_body {
+    padding: 0 10px 10px 10px;
+}
+
+/* ── Danger button ──────────────────────────────────── */
+
+.wo_btn_danger {
+    color: #ef5350 !important;
+    border-color: color-mix(in srgb, #ef5350 30%, transparent) !important;
+}
+
+.wo_btn_danger:hover {
+    background: color-mix(in srgb, #ef5350 15%, transparent) !important;
+}
+
+/* ── Date display (moved inside accordion) ──────────── */
+
+#wo_date_display {
+    font-family: monospace;
+    color: var(--SmartThemeQuoteColor);
+    font-weight: bold;
+    font-size: 0.9em;
+    margin-bottom: 6px;
+    margin-top: 2px;
+}
+
+/* ── Pending intro badge & button ───────────────────── */
+
+.wo_intro_badge {
+    font-size: 0.65em;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: var(--SmartThemeQuoteColor);
+    border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor) 50%, transparent);
+    border-radius: 3px;
+    padding: 1px 4px;
+    vertical-align: middle;
+    margin-left: 4px;
+    opacity: 0.85;
+}
+
+.wo_btn_introduce {
+    color: var(--SmartThemeQuoteColor) !important;
+    border-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 40%, transparent) !important;
+}
+
+.wo_btn_introduce_pulse {
+    animation: wo_pulse 2s ease-in-out infinite;
+}
+
+@keyframes wo_pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}

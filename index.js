@@ -473,6 +473,7 @@ function getNPCs() {
             events: runtime.events || [],
             permanentFacts: runtime.permanentFacts || [],
             lastLocation: runtime.lastLocation || null,
+            pendingIntro: npc.pendingIntro ?? false,
         };
     }
     return merged;
@@ -496,6 +497,7 @@ async function saveNPCs(npcs) {
             searchKeys: npc.searchKeys || [],
             lorebookName: npc.lorebookName || '',
             entryUid: npc.entryUid ?? null,
+            pendingIntro: npc.pendingIntro ?? false,
         };
         // Save runtime (events/facts/location) per chat
         s.npcData[botKey][chatKey][name] = {
@@ -679,7 +681,7 @@ function registerNPCs(scanned) {
     let added = 0;
     for (const { name, description, searchKeys, lorebookName, entryUid } of scanned) {
         if (!npcs[name]) {
-            npcs[name] = { name, description, searchKeys: searchKeys || [], lorebookName: lorebookName || '', entryUid: entryUid ?? null, enabled: true, events: [], permanentFacts: [] };
+            npcs[name] = { name, description, searchKeys: searchKeys || [], lorebookName: lorebookName || '', entryUid: entryUid ?? null, enabled: true, events: [], permanentFacts: [], pendingIntro: false };
             added++;
         } else {
             npcs[name].description = description;
@@ -1084,6 +1086,17 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext, sceneInfo)
                     + 'Write ONE sentence (15-30 words) that applies this archetype to THIS specific character — their personality, situation, relationships, and context. Be concrete and specific to them, not generic.');
     }).join('\n\n');
 
+    // Build pending intro instructions for manually added NPCs
+    const pendingIntros = npcList.filter(item => item.npc.pendingIntro);
+    let introBlock = '';
+    if (pendingIntros.length > 0) {
+        const names = pendingIntros.map(item => item.npc.name).join(', ');
+        introBlock = '=== PENDING NPC INTRODUCTION ===\n'
+            + 'The following NPC(s) need to be introduced into the story: ' + names + '.\n'
+            + 'This does NOT mean right now in this generation. It means: at the next naturally fitting moment in the narrative — when the scene, location, or situation makes their appearance believable and unforced — weave them in organically. Do not force it if the moment is wrong. Match the setting and tone.\n'
+            + '===\n\n';
+    }
+
     // Build scene context header from parsed info-block
     let sceneHeader = '';
     if (sceneInfo) {
@@ -1099,6 +1112,7 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext, sceneInfo)
     }
 
     const userContent = (mainCharInfo ? mainCharInfo + '\n\n' : '')
+        + introBlock
         + sceneHeader
         + 'CURRENT STORY CONTEXT:\n' + (sharedChatContext || 'none') + '\n\n'
         + npcBlocks + '\n\n'
@@ -1374,8 +1388,26 @@ function buildInjectionText(npcs, injectMax) {
         }).join('\n');
         return '• ' + npc.name + ' (currently: ' + loc + '):\n' + evLines;
     });
+    const s2 = getSettings();
+    const activeIntros = s2.activeIntros || {};
+    const npcsAll = Object.values(npcs);
+
+    // Strong one-shot intro (button was pressed)
+    const activeIntroNames = npcsAll.filter(n => n.pendingIntro && activeIntros[n.name]).map(n => n.name);
+    // Passive background intro (just exists, waiting)
+    const passiveIntroNames = npcsAll.filter(n => n.pendingIntro && !activeIntros[n.name]).map(n => n.name);
+
+    let introNote = '';
+    if (activeIntroNames.length) {
+        introNote += '\n[INTRODUCE NOW: ' + activeIntroNames.join(', ') + ' — this character should appear in the current scene. Find a natural, unforced way to bring them in that fits the setting and current situation. Do not make it awkward or abrupt.]';
+    }
+    if (passiveIntroNames.length) {
+        introNote += '\n[PENDING: ' + passiveIntroNames.join(', ') + ' — exists in this world, introduce naturally when the moment fits.]';
+    }
+
     return '[OFF-SCREEN NPC UPDATES — use when character enters scene. Do NOT generate this block yourself.]\n'
-        + lines.join('\n') + '\n[/OFF-SCREEN NPC UPDATES]';
+        + lines.join('\n') + '\n[/OFF-SCREEN NPC UPDATES]'
+        + introNote;
 }
 
 function updateInjection() {
@@ -1437,9 +1469,10 @@ function renderNPCList() {
         const card = $(`
         <div class="wo_npc_card ${npc.enabled ? '' : 'wo_npc_disabled'}" data-name="${key}">
             <div class="wo_npc_header">
-                <span class="wo_npc_name">${npc.name}</span>
+                <span class="wo_npc_name">${npc.name}${npc.pendingIntro ? ' <span class="wo_intro_badge">NEW</span>' : ''}</span>
                 <span class="wo_npc_count">${npc.lastLocation ? '<i class="fa-solid fa-location-dot" style="font-size:0.8em;margin-right:3px;"></i>' : ''}${count} event${count !== 1 ? 's' : ''}</span>
                 <div class="wo_npc_actions">
+                    ${npc.pendingIntro ? '<button class="wo_btn_introduce menu_button wo_btn_introduce_pulse" title="Introduce into scene"><i class="fa-solid fa-door-open"></i></button>' : ''}
                     <button class="wo_btn_toggle menu_button">${npc.enabled ? '<i class="fa-solid fa-pause"></i>' : '<i class="fa-solid fa-play"></i>'}</button>
                     <button class="wo_btn_clear menu_button" title="Clear events"><i class="fa-solid fa-trash-can"></i></button>
                     <button class="wo_btn_delete menu_button" title="Remove NPC"><i class="fa-solid fa-xmark"></i></button>
@@ -1567,6 +1600,21 @@ function renderNPCList() {
             if ($(e.target).closest('.wo_npc_actions').length) return;
             evContainer.slideToggle(150);
         });
+        card.find('.wo_btn_introduce').on('click', async (e) => {
+            e.stopPropagation();
+            const s = getSettings();
+            const botKey = getBotKey();
+            if (!s.npcData?.[botKey]?.__npcs?.[key]) return;
+            const npcData = s.npcData[botKey].__npcs[key];
+            // One-shot: inject a strong intro instruction into the next generation
+            // Store it so buildInjectionText can pick it up
+            if (!s.activeIntros) s.activeIntros = {};
+            s.activeIntros[key] = true;
+            saveSettingsDebounced();
+            toastr.info(`Introduction cued for ${key}. It will happen at the next fitting moment.`);
+            renderNPCList();
+        });
+
         card.find('.wo_btn_toggle').on('click', async () => {
             const s = getSettings();
             const botKey = getBotKey();
@@ -1607,63 +1655,94 @@ function buildUI() {
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
+
             <label class="checkbox_label"><input type="checkbox" id="wo_toggle" ${s.enabled ? 'checked' : ''} /><span>Enable</span></label>
             <div id="wo_status" class="wo_status" style="display:none;"></div>
 
-            <div class="wo_section_label">Current Story Date</div>
-            <div id="wo_date_display" style="font-family: monospace; color: var(--SmartThemeQuoteColor); margin-bottom: 10px; font-weight: bold;">—</div>
+            <!-- ── Section: Characters ── -->
+            <div class="wo_accordion">
+                <div class="wo_accordion_header" data-target="wo_sec_chars">
+                    <span><i class="fa-solid fa-users"></i> Characters</span>
+                    <i class="fa-solid fa-chevron-down wo_acc_icon"></i>
+                </div>
+                <div class="wo_accordion_body" id="wo_sec_chars">
+                    <div class="wo_section_label" style="margin-top:6px;">Current Story Date</div>
+                    <div id="wo_date_display">—</div>
 
-            <div id="wo_npc_list" class="wo_npc_list"></div>
+                    <div id="wo_npc_list" class="wo_npc_list"></div>
 
-            <div class="wo_section_label">Lorebook</div>
-            <div id="wo_book_info" class="wo_book_info">—</div>
-            <label><small>Scan entries at position</small></label>
-            <select id="wo_scan_position" class="text_pole" style="margin-bottom:6px;">
-                <option value="before_char">before_char</option>
-                <option value="after_char">after_char</option>
-            </select>
-            <div class="wo_actions">
-                <button id="wo_scan" class="menu_button"><i class="fa-solid fa-magnifying-glass"></i> Scan Lorebook</button>
-            </div>
-            <div class="wo_actions" style="margin-top:4px;">
-                <button id="wo_generate_now" class="menu_button"><i class="fa-solid fa-bolt"></i> Generate Now</button>
-            </div>
-
-            <hr>
-
-            <div class="wo_section_label">Add NPC manually</div>
-            <input type="text" id="wo_manual_name" class="text_pole" placeholder="Name" style="margin-bottom:4px;" />
-            <textarea id="wo_manual_desc" class="text_pole" placeholder="Description (optional)" rows="3" style="resize:vertical;margin-bottom:4px;"></textarea>
-            <button id="wo_manual_add" class="menu_button" style="width:100%;"><i class="fa-solid fa-user-plus"></i> Add NPC</button>
-
-            <hr>
-
-            <div class="wo_section_label">Token Context Settings</div>
-            <label><small>Messages history depth (how many messages to read)</small></label>
-            <input type="number" id="wo_max_messages" class="text_pole" value="${s.maxMessages || 30}" />
-            <label><small>Max characters per message (truncation limit)</small></label>
-            <input type="number" id="wo_max_chars" class="text_pole" value="${s.maxCharsPerMsg || 2000}" />
-
-            <hr>
-
-            <div class="wo_section_label">Output Language</div>
-            <div class="wo_lang_row">
-                <button class="wo_lang_btn menu_button" data-lang="en">EN</button>
-                <button class="wo_lang_btn menu_button" data-lang="ru">RU</button>
-                <button class="wo_lang_btn menu_button" data-lang="uk">UK</button>
+                    <div class="wo_actions" style="margin-top:6px;">
+                        <button id="wo_generate_now" class="menu_button"><i class="fa-solid fa-bolt"></i> Generate Now</button>
+                    </div>
+                    <div class="wo_actions" style="margin-top:4px;">
+                        <button id="wo_clear_all_events" class="menu_button"><i class="fa-solid fa-eraser"></i> Clear All Events</button>
+                        <button id="wo_delete_all_npcs" class="menu_button wo_btn_danger"><i class="fa-solid fa-trash-can"></i> Remove All</button>
+                    </div>
+                </div>
             </div>
 
-            <div class="wo_section_label">Connection Profile</div>
-            <div style="display:flex;gap:6px;align-items:center;">
-                <select id="wo_profile_select" class="text_pole" style="flex:1;"></select>
-                <button id="wo_profile_refresh" class="menu_button" title="Refresh profiles" style="flex-shrink:0;"><i class="fa-solid fa-rotate"></i></button>
+            <!-- ── Section: Add NPC ── -->
+            <div class="wo_accordion">
+                <div class="wo_accordion_header" data-target="wo_sec_add">
+                    <span><i class="fa-solid fa-user-plus"></i> Add NPC manually</span>
+                    <i class="fa-solid fa-chevron-down wo_acc_icon"></i>
+                </div>
+                <div class="wo_accordion_body" id="wo_sec_add" style="display:none;">
+                    <input type="text" id="wo_manual_name" class="text_pole" placeholder="Name" style="margin-top:6px;margin-bottom:4px;" />
+                    <textarea id="wo_manual_desc" class="text_pole" placeholder="Description (optional)" rows="3" style="resize:vertical;margin-bottom:4px;"></textarea>
+                    <button id="wo_manual_add" class="menu_button" style="width:100%;"><i class="fa-solid fa-user-plus"></i> Add NPC</button>
+                </div>
             </div>
 
-            <div class="wo_section_label">Event Settings</div>
-            <label><small>Generate events every N messages</small></label>
-            <input type="number" id="wo_trigger_every" class="text_pole" value="${s.triggerEvery}" />
-            <label><small>Max stored events per NPC</small></label>
-            <input type="number" id="wo_max_events" class="text_pole" value="${s.maxEvents}" />
+            <!-- ── Section: Lorebook & Tokens ── -->
+            <div class="wo_accordion">
+                <div class="wo_accordion_header" data-target="wo_sec_lore">
+                    <span><i class="fa-solid fa-book"></i> Lorebook & Context</span>
+                    <i class="fa-solid fa-chevron-down wo_acc_icon"></i>
+                </div>
+                <div class="wo_accordion_body" id="wo_sec_lore" style="display:none;">
+                    <div id="wo_book_info" class="wo_book_info" style="margin-top:6px;">—</div>
+                    <label style="margin-top:4px;"><small>Scan entries at position</small></label>
+                    <select id="wo_scan_position" class="text_pole" style="margin-bottom:6px;">
+                        <option value="before_char">before_char</option>
+                        <option value="after_char">after_char</option>
+                    </select>
+                    <div class="wo_actions">
+                        <button id="wo_scan" class="menu_button"><i class="fa-solid fa-magnifying-glass"></i> Scan Lorebook</button>
+                    </div>
+                    <div class="wo_section_label">Token Context</div>
+                    <label><small>Messages history depth</small></label>
+                    <input type="number" id="wo_max_messages" class="text_pole" value="${s.maxMessages || 30}" />
+                    <label><small>Max characters per message</small></label>
+                    <input type="number" id="wo_max_chars" class="text_pole" value="${s.maxCharsPerMsg || 2000}" />
+                    <label style="margin-top:4px;"><small>Generate events every N bot messages</small></label>
+                    <input type="number" id="wo_trigger_every" class="text_pole" value="${s.triggerEvery}" />
+                    <label><small>Max stored events per NPC</small></label>
+                    <input type="number" id="wo_max_events" class="text_pole" value="${s.maxEvents}" />
+                </div>
+            </div>
+
+            <!-- ── Section: API ── -->
+            <div class="wo_accordion">
+                <div class="wo_accordion_header" data-target="wo_sec_api">
+                    <span><i class="fa-solid fa-plug"></i> API & Language</span>
+                    <i class="fa-solid fa-chevron-down wo_acc_icon"></i>
+                </div>
+                <div class="wo_accordion_body" id="wo_sec_api" style="display:none;">
+                    <div class="wo_section_label" style="margin-top:6px;">Output Language</div>
+                    <div class="wo_lang_row">
+                        <button class="wo_lang_btn menu_button" data-lang="en">EN</button>
+                        <button class="wo_lang_btn menu_button" data-lang="ru">RU</button>
+                        <button class="wo_lang_btn menu_button" data-lang="uk">UK</button>
+                    </div>
+                    <div class="wo_section_label">Connection Profile</div>
+                    <div style="display:flex;gap:6px;align-items:center;">
+                        <select id="wo_profile_select" class="text_pole" style="flex:1;"></select>
+                        <button id="wo_profile_refresh" class="menu_button" title="Refresh profiles" style="flex-shrink:0;"><i class="fa-solid fa-rotate"></i></button>
+                    </div>
+                </div>
+            </div>
+
         </div>
     </div>`;
     $('#extensions_settings').append(html);
@@ -1734,6 +1813,52 @@ jQuery(async () => {
     refreshProfileSelect();
     renderNPCList();
 
+    // Accordion toggles
+    $('.wo_accordion_header').on('click', function() {
+        const target = $(this).data('target');
+        const body = $('#' + target);
+        const icon = $(this).find('.wo_acc_icon');
+        body.slideToggle(150);
+        icon.toggleClass('wo_acc_open');
+    });
+
+    // Bulk: clear all events (keep NPCs and facts)
+    $('#wo_clear_all_events').on('click', async () => {
+        if (!confirm('Clear all events for all NPCs in this chat? Permanent facts will be kept.')) return;
+        const s = getSettings();
+        const botKey = getBotKey();
+        const chatKey = getChatKey();
+        const chatStore = s.npcData?.[botKey]?.[chatKey];
+        if (chatStore) {
+            for (const name of Object.keys(chatStore)) {
+                if (chatStore[name]) {
+                    chatStore[name].events = [];
+                    chatStore[name].lastLocation = null;
+                }
+            }
+            saveSettingsDebounced();
+        }
+        renderNPCList(); updateInjection();
+        toastr.success('All events cleared.');
+    });
+
+    // Bulk: remove all NPCs entirely
+    $('#wo_delete_all_npcs').on('click', async () => {
+        if (!confirm('Remove ALL NPCs from tracking? This cannot be undone.')) return;
+        const s = getSettings();
+        const botKey = getBotKey();
+        if (s.npcData?.[botKey]) {
+            s.npcData[botKey].__npcs = {};
+            // Also clear all chat stores
+            for (const ck of Object.keys(s.npcData[botKey])) {
+                if (ck !== '__npcs') delete s.npcData[botKey][ck];
+            }
+            saveSettingsDebounced();
+        }
+        renderNPCList(); updateInjection();
+        toastr.success('All NPCs removed.');
+    });
+
     // Language buttons
     function updateLangButtons() {
         const lang = getSettings().outputLanguage || 'en';
@@ -1790,7 +1915,7 @@ jQuery(async () => {
             toastr.warning(`"${name}" is already registered.`);
             return;
         }
-        npcs[name] = { name, description: desc, enabled: true, events: [], permanentFacts: [] };
+        npcs[name] = { name, description: desc, enabled: true, events: [], permanentFacts: [], pendingIntro: true };
         await saveNPCs(npcs);
         renderNPCList();
         updateInjection();
@@ -1812,6 +1937,33 @@ jQuery(async () => {
     // This avoids the re-entrant loop that GENERATION_STARTED caused (it fires during our own callAPI too).
     eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, async () => {
         updateDateDisplay();
+
+        // Auto-clear pendingIntro if NPC appeared in infoblock; clear activeIntros (one-shot)
+        try {
+            const ctx = SillyTavern.getContext();
+            const lastMsg = (ctx.chat || []).slice(-1)[0];
+            if (lastMsg?.mes) {
+                const s = getSettings();
+                const botKey = getBotKey();
+                const npcsIdentity = s.npcData?.[botKey]?.__npcs || {};
+                let changed = false;
+                for (const [name, npc] of Object.entries(npcsIdentity)) {
+                    if (npc.pendingIntro && npcInInfoblock({ name }, lastMsg.mes)) {
+                        npcsIdentity[name].pendingIntro = false;
+                        if (s.activeIntros) delete s.activeIntros[name];
+                        changed = true;
+                        toastr.success(`${name} has entered the scene!`);
+                        console.log('[WildOffscreen] pendingIntro cleared for', name);
+                    } else if (s.activeIntros?.[name]) {
+                        // One-shot fired but NPC didn't appear yet — clear active flag anyway
+                        delete s.activeIntros[name];
+                        changed = true;
+                    }
+                }
+                if (changed) { saveSettingsDebounced(); renderNPCList(); }
+            }
+        } catch(e) {}
+
         if (isGenerating) return; // our own API call, ignore
 
         const s = getSettings();
