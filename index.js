@@ -670,12 +670,36 @@ function getArchetypeForParams(params) {
 function getMainCharInfo() {
     try {
         const ctx = SillyTavern.getContext();
+
+        // Bot character
         const char = ctx.characters?.[ctx.characterId];
-        if (!char) return '';
-        const name = char.name || '';
-        const desc = [char.description, char.personality, char.scenario]
+        const botName = char?.name || '';
+        const botDesc = [char?.description, char?.personality, char?.scenario]
             .filter(Boolean).join('\n').trim().slice(0, 2000);
-        return name ? 'MAIN CHARACTER: ' + name + '\n' + desc : '';
+        const botBlock = botName ? 'MAIN CHARACTER (bot): ' + botName + '\n' + botDesc : '';
+
+        // User persona — ST exposes it via ctx.name1 (display name) and
+        // ctx.personas / power_user.personas for the full description
+        let userBlock = '';
+        try {
+            const userName = ctx.name1 || '';
+            // Active persona description: try ctx.persona first, then power_user
+            let userDesc = '';
+            const pu = ctx.powerUser || window.power_user || {};
+            if (pu.personas && pu.active_persona) {
+                const activePersona = pu.personas[pu.active_persona];
+                if (activePersona?.description) userDesc = activePersona.description.trim().slice(0, 1000);
+            }
+            // Fallback: some ST versions expose it directly
+            if (!userDesc && ctx.persona) userDesc = String(ctx.persona).trim().slice(0, 1000);
+
+            if (userName || userDesc) {
+                userBlock = 'USER CHARACTER: ' + (userName || 'User')
+                    + (userDesc ? '\n' + userDesc : '');
+            }
+        } catch(e) { /* persona not available */ }
+
+        return [botBlock, userBlock].filter(Boolean).join('\n\n');
     } catch (e) { return ''; }
 }
 
@@ -1013,7 +1037,9 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext, sceneInfo)
     return [
         {
             role: 'system',
-            content: 'You write brief offscreen event summaries for story characters. '
+            content: 'You write brief offscreen event summaries for supporting characters in a collaborative story. '
+                + 'You are given the main bot character, the user character (player), and a list of NPCs. '
+                + 'NPCs are secondary characters whose lives continue offscreen while the main scene unfolds. '
                 + 'Dry, specific, one sentence per character. No names at sentence start. No dialogue. No poetic language. '
                 + 'RULE 1: Each NPC is marked [IN SCENE] or [OFFSCREEN]. '
                 + '[IN SCENE] = write exactly: "location | in-scene | No offscreen events. Currently in scene." '
@@ -1335,11 +1361,11 @@ function renderNPCList() {
         <div class="wo_npc_card ${npc.enabled ? '' : 'wo_npc_disabled'}" data-name="${key}">
             <div class="wo_npc_header">
                 <span class="wo_npc_name">${npc.name}</span>
-                <span class="wo_npc_count">${npc.lastLocation ? '📍 ' : ''}${count} event${count !== 1 ? 's' : ''}</span>
+                <span class="wo_npc_count">${npc.lastLocation ? '<i class="fa-solid fa-location-dot" style="font-size:0.8em;margin-right:3px;"></i>' : ''}${count} event${count !== 1 ? 's' : ''}</span>
                 <div class="wo_npc_actions">
-                    <button class="wo_btn_toggle menu_button">${npc.enabled ? '⏸' : '▶'}</button>
-                    <button class="wo_btn_clear menu_button">🗑</button>
-                    <button class="wo_btn_delete menu_button">✕</button>
+                    <button class="wo_btn_toggle menu_button">${npc.enabled ? '<i class="fa-solid fa-pause"></i>' : '<i class="fa-solid fa-play"></i>'}</button>
+                    <button class="wo_btn_clear menu_button" title="Clear events"><i class="fa-solid fa-trash-can"></i></button>
+                    <button class="wo_btn_delete menu_button" title="Remove NPC"><i class="fa-solid fa-xmark"></i></button>
                 </div>
             </div>
             <div class="wo_npc_events" style="display:none;"></div>
@@ -1348,23 +1374,23 @@ function renderNPCList() {
 
 
         if (npc.lastLocation) {
-            evContainer.append('<div class="wo_npc_location">📍 ' + npc.lastLocation + '</div>');
+            evContainer.append('<div class="wo_npc_location"><i class="fa-solid fa-location-dot"></i> ' + npc.lastLocation + '</div>');
         }
 
         // ── Permanent facts section ──────────────────────────────
         const facts = Array.isArray(npc.permanentFacts) ? npc.permanentFacts : [];
         if (facts.length) {
-            evContainer.append('<div style="font-size:0.78em;font-weight:700;opacity:0.6;text-transform:uppercase;letter-spacing:0.05em;margin: 6px 0 3px 0;">📌 Permanent facts</div>');
+            evContainer.append('<div style="font-size:0.78em;font-weight:700;opacity:0.6;text-transform:uppercase;letter-spacing:0.05em;margin: 6px 0 3px 0;"><i class="fa-solid fa-thumbtack"></i> Permanent facts</div>');
             facts.forEach((fact, fi) => {
                 const fcolor = fact.positive ? '#66bb6a' : '#ef5350';
                 const autoTag = '';
                 const fRow = $(`
                     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;margin-bottom:4px;padding:4px 6px;border-radius:3px;background:color-mix(in srgb, var(--SmartThemeQuoteColor) 8%, transparent);border-left:2px solid color-mix(in srgb, var(--SmartThemeQuoteColor) 40%, transparent);">
                         <div style="flex:1;font-size:0.82em;">
-                            <span style="color:${fcolor};font-weight:600;">${fact.positive ? '▲' : '▼'} ${fact.category || ''}${autoTag}</span>
+                            <span style="color:${fcolor};font-weight:600;">${fact.positive ? '<i class="fa-solid fa-caret-up"></i>' : '<i class="fa-solid fa-caret-down"></i>'} ${fact.category || ''}${autoTag}</span>
                             <div style="opacity:0.9;line-height:1.4;">${fact.text}</div>
                         </div>
-                        <button class="wo_btn_delete_fact menu_button" data-fidx="${fi}" title="Remove permanent fact" style="padding:0px 4px;font-size:0.75em;min-width:unset;opacity:0.4;">✕</button>
+                        <button class="wo_btn_delete_fact menu_button" data-fidx="${fi}" title="Remove permanent fact" style="padding:0px 4px;font-size:0.75em;min-width:unset;opacity:0.4;"><i class="fa-solid fa-xmark"></i></button>
                     </div>
                 `);
                 evContainer.append(fRow);
@@ -1376,7 +1402,7 @@ function renderNPCList() {
             evContainer.append('<div class="wo_no_events">No events yet.</div>');
         } else if (npc.events.length) {
             if (facts.length) {
-                evContainer.append('<div style="font-size:0.78em;font-weight:700;opacity:0.6;text-transform:uppercase;letter-spacing:0.05em;margin: 8px 0 3px 0;">🕐 Recent events</div>');
+                evContainer.append('<div style="font-size:0.78em;font-weight:700;opacity:0.6;text-transform:uppercase;letter-spacing:0.05em;margin: 8px 0 3px 0;"><i class="fa-solid fa-clock-rotate-left"></i> Recent events</div>');
             }
             const reversedEvents = [...npc.events].reverse();
             for (let i = 0; i < reversedEvents.length; i++) {
@@ -1384,7 +1410,7 @@ function renderNPCList() {
                 const originalIndex = npc.events.length - 1 - i;
                 const color = ev.positive ? '#66bb6a' : '#ef5350';
                 const locTag = ev.location && ev.location !== 'unknown'
-                    ? '<span class="wo_event_loc">📍 ' + ev.location + '</span>'
+                    ? '<span class="wo_event_loc"><i class="fa-solid fa-location-dot"></i> ' + ev.location + '</span>'
                     : '';
                 const evText = typeof ev.text === 'string' ? ev.text : String(ev.text?.text || ev.text || '');
                 const isMajor = ev.scale === 'major';
@@ -1393,13 +1419,13 @@ function renderNPCList() {
                 const evRow = $(`
                     <div class="wo_event" style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px;">
                         <div style="flex:1;">
-                            <span class="wo_event_meta" style="color:${color}">${ev.positive ? '▲' : '▼'} ${ev.scale.toUpperCase()} · ${ev.category}${isMajor ? ' ⭐' : ''}</span>
+                            <span class="wo_event_meta" style="color:${color}">${ev.positive ? '<i class="fa-solid fa-caret-up"></i>' : '<i class="fa-solid fa-caret-down"></i>'} ${ev.scale.toUpperCase()} · ${ev.category}${isMajor ? ' <i class="fa-solid fa-star" style="font-size:0.8em;color:#ffa726;"></i>' : ''}</span>
                             ${locTag}
                             <div class="wo_event_text">${evText}</div>
                         </div>
                         <div style="display:flex;flex-direction:column;gap:2px;flex-shrink:0;">
-                            ${alreadyFact ? '' : '<button class="wo_btn_promote_event menu_button" data-idx="' + originalIndex + '" title="Save as permanent fact" style="padding:0px 4px;font-size:0.75em;min-width:unset;opacity:0.55;">📌</button>'}
-                            <button class="wo_btn_delete_event menu_button" data-idx="${originalIndex}" title="Delete this event" style="padding:0px 4px;font-size:0.75em;min-width:unset;opacity:0.4;">✕</button>
+                            ${alreadyFact ? '' : '<button class="wo_btn_promote_event menu_button" data-idx="' + originalIndex + '" title="Save as permanent fact" style="padding:0px 4px;font-size:0.75em;min-width:unset;opacity:0.55;"><i class=\"fa-solid fa-thumbtack\"></i></button>'}
+                            <button class="wo_btn_delete_event menu_button" data-idx="${originalIndex}" title="Delete this event" style="padding:0px 4px;font-size:0.75em;min-width:unset;opacity:0.4;"><i class="fa-solid fa-xmark"></i></button>
                         </div>
                     </div>
                 `);
@@ -1501,13 +1527,13 @@ function buildUI() {
             <div class="wo_section_label">Lorebook</div>
             <div id="wo_book_info" class="wo_book_info">—</div>
             <div class="wo_actions">
-                <input type="button" id="wo_scan" class="menu_button" value="🔍 Scan Lorebook" />
-                <label class="menu_button wo_file_btn" for="wo_file_input">📂 Load JSON</label>
+                <button id="wo_scan" class="menu_button"><i class="fa-solid fa-magnifying-glass"></i> Scan Lorebook</button>
+                <label class="menu_button wo_file_btn" for="wo_file_input"><i class="fa-solid fa-folder-open"></i> Load JSON</label>
                 <input type="file" id="wo_file_input" accept=".json" style="display:none;" />
             </div>
             <div class="wo_actions" style="margin-top:4px;">
-                <input type="button" id="wo_generate_now" class="menu_button" value="⚡ Generate Now" />
-                <input type="button" id="wo_debug_btn" class="menu_button" value="🔎 Debug" />
+                <button id="wo_generate_now" class="menu_button"><i class="fa-solid fa-bolt"></i> Generate Now</button>
+                <button id="wo_debug_btn" class="menu_button"><i class="fa-solid fa-bug"></i> Debug</button>
             </div>
             <div id="wo_debug_panel" class="wo_debug_out" style="display:none;"></div>
 
@@ -1524,7 +1550,7 @@ function buildUI() {
             <div class="wo_section_label">Connection Profile</div>
             <div style="display:flex;gap:6px;align-items:center;">
                 <select id="wo_profile_select" class="text_pole" style="flex:1;"></select>
-                <input type="button" id="wo_profile_refresh" class="menu_button" value="🔄" title="Refresh profiles" style="flex-shrink:0;" />
+                <button id="wo_profile_refresh" class="menu_button" title="Refresh profiles" style="flex-shrink:0;"><i class="fa-solid fa-rotate"></i></button>
             </div>
 
             <div class="wo_section_label">Event Settings</div>
@@ -1620,11 +1646,11 @@ jQuery(async () => {
             if (!found.length) {
                 const books = bookNames.length ? `Books checked: ${bookNames.join(', ')}` : 'No lorebook attached to this character.';
                 toastr.warning(`No NPC entries found. ${books}`);
-                $('#wo_book_info').text(bookNames.length ? `📖 ${bookNames.join(', ')} — 0 NPCs` : 'No lorebook attached');
+                $('#wo_book_info').html(bookNames.length ? `<i class="fa-solid fa-book"></i> ${bookNames.join(', ')} — 0 NPCs` : 'No lorebook attached');
             } else {
                 const { npcs, added } = registerNPCs(found);
                 await saveNPCs(npcs); renderNPCList(); updateInjection();
-                $('#wo_book_info').text(`📖 ${bookNames.join(', ')} — ${found.length} NPCs`);
+                $('#wo_book_info').html(`<i class="fa-solid fa-book"></i> ${bookNames.join(', ')} — ${found.length} NPCs`);
                 toastr.success(`Scan complete: ${found.length} NPCs found, ${added} newly added.`);
             }
         } catch (e) { toastr.error('Scan failed: ' + e.message); }
@@ -1639,7 +1665,7 @@ jQuery(async () => {
             if (!found.length) { toastr.warning('No NPC entries found.'); return; }
             const { npcs, added } = registerNPCs(found);
             await saveNPCs(npcs); renderNPCList(); updateInjection();
-            $('#wo_book_info').text(`📂 ${file.name} — ${found.length} NPCs`);
+            $('#wo_book_info').html(`<i class="fa-solid fa-folder-open"></i> ${file.name} — ${found.length} NPCs`);
             toastr.success(`Loaded: ${found.length} NPCs, ${added} newly added.`);
         } catch (e) { toastr.error('Load failed: ' + e.message); }
         this.value = '';
@@ -1662,7 +1688,7 @@ jQuery(async () => {
         const s = getSettings();
         const mainInfo = getMainCharInfo();
 
-        panel.append('<div class="wo_debug_title">🔎 Wild Offscreen Debug</div>');
+        panel.append('<div class="wo_debug_title"><i class="fa-solid fa-bug"></i> Wild Offscreen Debug</div>');
 
         panel.append('<div class="wo_debug_title" style="margin-top:8px;">Settings</div>');
         panel.append('<div class="wo_debug_entry">'
@@ -1671,9 +1697,9 @@ jQuery(async () => {
             + 'Max events/NPC: <code>' + s.maxEvents + '</code>'
             + '</div>');
 
-        panel.append('<div class="wo_debug_title" style="margin-top:8px;">Main character (bot)</div>');
+        panel.append('<div class="wo_debug_title" style="margin-top:8px;">Characters in context</div>');
         panel.append('<div class="wo_debug_entry">'
-            + (mainInfo ? '<code>' + mainInfo.slice(0, 200) + (mainInfo.length > 200 ? '…' : '') + '</code>' : '<span style="color:#ef5350">Not found</span>')
+            + (mainInfo ? '<code>' + mainInfo.slice(0, 400) + (mainInfo.length > 400 ? '…' : '') + '</code>' : '<span style="color:#ef5350">Not found</span>')
             + '</div>');
 
         try {
