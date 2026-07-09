@@ -400,7 +400,6 @@ const CATEGORIES = Object.keys(EVENT_POOLS.minor);
 let msgCounter = 0;
 let lastChatLength = 0;  // tracks chat size to detect rerolls
 let isGenerating = false; // guard against re-entrant generation
-let lastProcessedMsgId = null; // deduplicate MESSAGE_RECEIVED + CHARACTER_MESSAGE_RENDERED
 
 // ── Settings ───────────────────────────────────────────────
 
@@ -1137,13 +1136,12 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext, sceneInfo)
         + '- Match the TONE (positive = something opens up or improves, negative = something closes down or hurts)\n'
         + '- Do NOT start with their name. No dialogue. No poetic language.\n\n'
         + 'Also self-report: a short location (1-5 words) and the actual scale of what you wrote (minor/notable/major).\n\n'
-        + 'YOUR RESPONSE MUST USE EXACTLY THIS FORMAT — no deviations:\n'
-        + npcList.map((item, i) => 'NPC' + (i + 1) + ': [location] | [minor/notable/major] | [sentence]').join('\n') + '\n\n'
-        + 'CRITICAL: Use NPC1, NPC2, NPC3... labels. Do NOT use character names as labels. Do NOT add any text before or after.\n'
-        + 'Example:\n'
-        + 'NPC1: городской рынок | minor | Bargained longer than usual over fabric and left without buying anything.\n'
-        + 'NPC2: больница | major | Was told the results came back positive and sat unable to move.\n'
-        + 'NPC3: Тюменское ГУВД, кабинет Парфёнова | in-scene | No offscreen events. Currently in scene.';
+        + 'Respond with ONLY this format, one line per NPC:\n'
+        + npcList.map((item, i) => 'NPC' + (i + 1) + ': [location] | [minor/notable/major] | [event sentence]').join('\n') + '\n'
+        + 'Example offscreen: NPC1: городской рынок | minor | Bargained longer than usual over fabric and left without buying anything.\n'
+        + 'Example major: NPC2: больница | major | Was told the results came back positive and sat in the corridor for an hour unable to move.\n'
+        + 'Example in-scene: NPC3: Тюменское ГУВД, кабинет Парфёнова | in-scene | No offscreen events. Currently in scene.\n'
+        + 'IMPORTANT: exactly three pipe-separated fields per line. No extra text after the sentence.';
 
     console.log('[WildOffscreen] Batch prompt for', npcList.length, 'NPCs, userContent length:', userContent.length);
 
@@ -1172,25 +1170,11 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext, sceneInfo)
  * Expected format per line: NPC1: [location] | [event sentence]
  * Returns array of { location, text } or null per NPC.
  */
-function parseBatchResponse(text, count, npcList) {
+function parseBatchResponse(text, count) {
     const results = [];
     for (let i = 1; i <= count; i++) {
-        // Primary: match NPC1:, NPC2: etc.
-        let regex = new RegExp('NPC' + i + '[:\s]+(.+?)(?=NPC' + (i + 1) + '[:\s]|$)', 'si');
-        let match = text.match(regex);
-
-        // Fallback: if NPC label not found, try matching by character name
-        if (!match && npcList && npcList[i - 1]) {
-            const npcName = npcList[i - 1].npc.name.split(' ')[0]; // first name/word
-            const nameRegex = new RegExp(
-                '(?:^|\n)' + npcName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') +
-                '[:\s]+(.+?)(?=\n[A-ZА-ЯЁ][^\n]*[:\s]|$)',
-                'si'
-            );
-            match = text.match(nameRegex);
-            if (match) console.log('[WildOffscreen] Fallback name match for NPC' + i + ' (' + npcName + ')');
-        }
-
+        const regex = new RegExp('NPC' + i + '[:\\s]+(.+?)(?=NPC' + (i + 1) + '[:\\s]|$)', 'si');
+        const match = text.match(regex);
         if (!match) { results.push(null); continue; }
 
         let raw = match[1].trim().replace(/^["']|["']$/g, '').trim();
@@ -1283,7 +1267,7 @@ async function generateEventsForAllNPCs(npcs) {
 
     if (!offscreenKeys.length) {
         console.log('[WildOffscreen] All NPCs in scene, nothing to generate.');
-        return 'all_in_scene';
+        return;
     }
 
     const npcList = offscreenKeys.map(k => ({ npc: npcs[k], key: k, params: rollEventParams() }));
@@ -1294,7 +1278,7 @@ async function generateEventsForAllNPCs(npcs) {
 
     if (!rawText) return;
 
-    const parsed = parseBatchResponse(rawText, npcList.length, npcList);
+    const parsed = parseBatchResponse(rawText, npcList.length);
     const s = getSettings();
 
     for (let i = 0; i < npcList.length; i++) {
@@ -1349,9 +1333,84 @@ async function generateEventsForAllNPCs(npcs) {
 
         console.log('[WildOffscreen] Event for', npc.name, '@', result.location, ':', result.text);
     }
+}
 
-    // Save all mutations back to storage
-    await saveNPCs(npcs);
+async function generateForSingleNPC(npcName) {
+    if (isGenerating) { toastr.warning('Already generating, please wait.'); return; }
+    const npcs = getNPCs();
+    const npc = npcs[npcName];
+    if (!npc || !npc.enabled) return;
+
+    isGenerating = true;
+    $('#wo_status').text('Generating for ' + npcName + '…').show();
+
+    try {
+        const sceneInfo = parseSceneInfo();
+        const storyDate = sceneInfo ? [sceneInfo.date, sceneInfo.time].filter(Boolean).join(' ') : null;
+        const sceneCharsForFilter = (sceneInfo && Array.isArray(sceneInfo.characters)) ? sceneInfo.characters : [];
+        const inScene = sceneCharsForFilter.some(c => {
+            if (!c || typeof c !== 'string') return false;
+            const cl = c.toLowerCase().trim();
+            return cl === npcName.toLowerCase() || cl.includes(npcName.toLowerCase());
+        });
+
+        if (inScene) { toastr.info(npcName + ' is currently in scene — no offscreen events.'); return; }
+
+        const mainCharInfo = getMainCharInfo();
+        const sharedChat = (() => {
+            try {
+                const ctx = SillyTavern.getContext();
+                const s = getSettings();
+                return (ctx.chat || [])
+                    .filter(m => !m.is_system && m.mes)
+                    .slice(-s.maxMessages)
+                    .map(m => (m.is_user ? '[User]' : '[Bot]') + ' ' + m.mes.replace(/<[^>]+>/g, '').trim().slice(0, s.maxCharsPerMsg))
+                    .join('\n');
+            } catch(e) { return ''; }
+        })();
+
+        const params = rollEventParams();
+        const npcList = [{ npc, key: npcName, params }];
+        const messages = buildBatchMessages(npcList, mainCharInfo, sharedChat, sceneInfo);
+        const rawText = await callAPI(messages, 1);
+        if (!rawText) { toastr.error('No response from API.'); return; }
+
+        const parsed = parseBatchResponse(rawText, 1);
+        const result = parsed[0];
+        if (!result || result.inScene) { toastr.warning('No event generated.'); return; }
+
+        const s = getSettings();
+        const event = {
+            text: result.text,
+            location: result.location,
+            scale: result.reportedScale || params.scale.id,
+            category: params.category,
+            positive: params.isPositive,
+            timestamp: Date.now(),
+            storyDate: storyDate || null,
+        };
+        npc.events.push(event);
+        if (npc.events.length > s.maxEvents) npc.events = npc.events.slice(-s.maxEvents);
+        if (!npc.permanentFacts) npc.permanentFacts = [];
+        if (result.reportedScale === 'major') {
+            if (!npc.permanentFacts.some(f => f.text === result.text)) {
+                npc.permanentFacts.push({ text: result.text, category: params.category, positive: params.isPositive, timestamp: Date.now(), storyDate: storyDate || null, auto: true });
+            }
+        }
+        if (result.location && result.location !== 'unknown') npc.lastLocation = result.location;
+
+        const allNpcs = getNPCs();
+        allNpcs[npcName] = npc;
+        await saveNPCs(allNpcs);
+        renderNPCList();
+        updateInjection();
+        toastr.success('Event generated for ' + npcName + '.');
+    } catch(e) {
+        toastr.error('Error: ' + e.message);
+    } finally {
+        isGenerating = false;
+        $('#wo_status').text('').hide();
+    }
 }
 
 async function runGenerationCycle() {
@@ -1367,42 +1426,47 @@ async function runGenerationCycle() {
     $('#wo_status').text('Generating offscreen events…').show();
 
     try {
-        // Snapshot event counts before generation
         const beforeCounts = Object.fromEntries(keys.map(k => [k, npcs[k].events.length]));
 
-        // generateEventsForAllNPCs handles in-scene filtering and saving internally
-        const result = await generateEventsForAllNPCs(npcs);
+        // Figure out which NPCs are offscreen (expect events) vs in-scene (expect nothing)
+        const sceneInfo = parseSceneInfo();
+        const sceneChars = (sceneInfo && Array.isArray(sceneInfo.characters)) ? sceneInfo.characters : [];
+        const isInScene = (npc) => sceneChars.some(c => {
+            if (!c || typeof c !== 'string') return false;
+            const cl = c.toLowerCase().trim();
+            const nl = npc.name.toLowerCase();
+            const sk = Array.isArray(npc.searchKeys) ? npc.searchKeys : [];
+            return cl === nl || cl.includes(nl) || nl.includes(cl)
+                || sk.some(k => k && typeof k === 'string' && cl.includes(k.toLowerCase()));
+        });
+        const offscreenKeys = keys.filter(k => !isInScene(npcs[k]));
+        const inSceneKeys   = keys.filter(k =>  isInScene(npcs[k]));
+        console.log('[WildOffscreen] Offscreen:', offscreenKeys.length, '| In scene:', inSceneKeys.length);
 
-        // If it returned 'all_in_scene', nothing to do
-        if (result === 'all_in_scene') {
-            toastr.info('All active NPCs are currently in scene — no offscreen events generated.');
-            updateInjection(); renderNPCList();
-            return;
-        }
-
-        // Re-fetch and check results
-        let npcsAfter = getNPCs();
-        const newEventKeys = keys.filter(k => npcsAfter[k] && (npcsAfter[k].events.length || 0) > (beforeCounts[k] || 0));
-
-        if (newEventKeys.length === 0) {
-            console.log('[WildOffscreen] First attempt got 0 results, retrying...');
+        await generateEventsForAllNPCs(npcs);
+        const firstGenerated = offscreenKeys.filter(k => npcs[k].events.length > beforeCounts[k]).length;
+        if (firstGenerated === 0 && offscreenKeys.length > 0) {
+            console.log('[WildOffscreen] First attempt got 0 offscreen results, retrying...');
             await new Promise(r => setTimeout(r, 1500));
-            await generateEventsForAllNPCs(getNPCs());
-            npcsAfter = getNPCs();
+            await generateEventsForAllNPCs(npcs);
         }
 
+        await saveNPCs(npcs);
         updateInjection();
         renderNPCList();
 
-        const generated = keys.filter(k => npcsAfter[k] && (npcsAfter[k].events.length || 0) > (beforeCounts[k] || 0)).length;
-        console.log('[WildOffscreen] Generated events for', generated, '/', keys.length, 'active NPCs');
+        const generated = offscreenKeys.filter(k => npcs[k].events.length > beforeCounts[k]).length;
+        const failed = offscreenKeys.length - generated;
 
-        if (generated === 0) {
+        if (offscreenKeys.length === 0 && inSceneKeys.length > 0) {
+            toastr.info(`All ${inSceneKeys.length} NPC(s) are currently in scene — no offscreen events generated.`);
+        } else if (generated === 0 && offscreenKeys.length > 0) {
             toastr.error('Generation failed. Check your connection profile and model.');
-        } else if (generated < keys.length) {
-            toastr.warning(`Generated events for ${generated}/${keys.length} NPCs.`);
+        } else if (failed > 0) {
+            toastr.warning(`Generated events for ${generated}/${offscreenKeys.length} offscreen NPCs.`);
         } else {
-            toastr.success(`Generated events for all ${generated} NPCs.`);
+            const inSceneNote = inSceneKeys.length ? ` (${inSceneKeys.length} in scene, skipped)` : '';
+            toastr.success(`Generated events for all ${generated} offscreen NPCs.` + inSceneNote);
         }
     } catch(e) {
         console.error('[WildOffscreen] runGenerationCycle error:', e.message);
@@ -1444,15 +1508,7 @@ function buildInjectionText(npcs, injectMax) {
 
     let introNote = '';
     if (activeIntroNames.length) {
-        const names = activeIntroNames.join(', ');
-        introNote += '\n\n[!!! MANDATORY — DO NOT SKIP !!!]\n'
-            + 'You MUST introduce the following character(s) into THIS response, right now: ' + names + '.\n'
-            + 'This is not a suggestion. This character MUST physically appear or be directly referenced in the scene you are about to write.\n'
-            + 'Requirements:\n'
-            + '- They must enter, arrive, be encountered, or make their presence known within this very message\n'
-            + '- The introduction must feel natural and consistent with the current location, time of day, and tone of the scene\n'
-            + '- Do NOT delay it to the next message. Do NOT hint at their arrival. Make it happen NOW.\n'
-            + '[!!! END MANDATORY !!!]';
+        introNote += '\n[INTRODUCE NOW: ' + activeIntroNames.join(', ') + ' — this character should appear in the current scene. Find a natural, unforced way to bring them in that fits the setting and current situation. Do not make it awkward or abrupt.]';
     }
     if (passiveIntroNames.length) {
         introNote += '\n[PENDING: ' + passiveIntroNames.join(', ') + ' — exists in this world, introduce naturally when the moment fits.]';
@@ -1515,31 +1571,9 @@ function onGenerationStarted() {
 
 // ── UI ─────────────────────────────────────────────────────
 
-function populateEditSelect() {
-    const npcs = getNPCs();
-    const sel = $('#wo_edit_npc_select');
-    if (!sel.length) return;
-    const current = sel.val();
-    sel.empty().append('<option value="">— select NPC —</option>');
-    Object.keys(npcs).forEach(name => {
-        sel.append($('<option>').val(name).text(name));
-    });
-    if (current && npcs[current]) sel.val(current);
-    else { $('#wo_edit_npc_panel').hide(); }
-}
-
 function renderNPCList() {
     const npcs = getNPCs();
     const container = $('#wo_npc_list');
-
-    // Remember which cards are currently open before re-render
-    const openCards = new Set();
-    container.find('.wo_npc_card').each(function() {
-        if ($(this).find('.wo_npc_events').is(':visible')) {
-            openCards.add($(this).data('name'));
-        }
-    });
-
     container.empty();
     const keys = Object.keys(npcs);
     if (!keys.length) {
@@ -1556,6 +1590,7 @@ function renderNPCList() {
                 <span class="wo_npc_count">${npc.lastLocation ? '<i class="fa-solid fa-location-dot" style="font-size:0.8em;margin-right:3px;"></i>' : ''}${count} event${count !== 1 ? 's' : ''}</span>
                 <div class="wo_npc_actions">
                     ${npc.pendingIntro ? '<button class="wo_btn_introduce menu_button wo_btn_introduce_pulse" title="Introduce into scene"><i class="fa-solid fa-door-open"></i></button>' : ''}
+                    <button class="wo_btn_gen_one menu_button" title="Generate event for this NPC only"><i class="fa-solid fa-bolt"></i></button>
                     <button class="wo_btn_toggle menu_button">${npc.enabled ? '<i class="fa-solid fa-pause"></i>' : '<i class="fa-solid fa-play"></i>'}</button>
                     <button class="wo_btn_clear menu_button" title="Clear events"><i class="fa-solid fa-trash-can"></i></button>
                     <button class="wo_btn_delete menu_button" title="Remove NPC"><i class="fa-solid fa-xmark"></i></button>
@@ -1570,7 +1605,58 @@ function renderNPCList() {
             evContainer.append('<div class="wo_npc_location"><i class="fa-solid fa-location-dot"></i> ' + npc.lastLocation + '</div>');
         }
 
+        // Notes field
+        const notesVal = npc.notes || '';
+        const notesRow = $('<div class="wo_notes_row"></div>');
+        const notesInput = $('<textarea class="wo_notes_input text_pole" placeholder="Notes (always sent to AI)..." rows="2"></textarea>').val(notesVal);
+        let notesTimer = null;
+        notesInput.on('input', function() {
+            clearTimeout(notesTimer);
+            notesTimer = setTimeout(async () => {
+                const s = getSettings();
+                const botKey = getBotKey();
+                if (s.npcData?.[botKey]?.__npcs?.[key]) {
+                    s.npcData[botKey].__npcs[key].notes = notesInput.val().trim();
+                    saveSettingsDebounced();
+                }
+            }, 600);
+        });
+        notesRow.append(notesInput);
+        evContainer.append(notesRow);
 
+        // Edit description
+        const hasCustomDesc = npc.lorebookDescription && npc.description !== npc.lorebookDescription;
+        const descRow = $('<div class="wo_desc_row"></div>');
+        const descToggle = $('<button class="wo_btn_desc_edit menu_button" style="width:100%;font-size:0.8em;margin-bottom:4px;opacity:0.6;"><i class="fa-solid fa-pen-to-square"></i> ' + (hasCustomDesc ? 'Description (edited)' : 'Edit description') + '</button>');
+        const descArea = $('<textarea class="wo_desc_input text_pole" rows="4" style="display:none;resize:vertical;"></textarea>').val(npc.description);
+        const descActions = $('<div style="display:none;gap:4px;" class="wo_actions wo_desc_actions"></div>');
+        const descSave = $('<button class="menu_button" style="flex:1;font-size:0.8em;"><i class="fa-solid fa-floppy-disk"></i> Save</button>');
+        const descReset = $('<button class="menu_button" style="flex:1;font-size:0.8em;opacity:0.6;" title="Restore lorebook description"><i class="fa-solid fa-rotate-left"></i> Reset</button>');
+        descActions.append(descSave).append(descReset);
+        descToggle.on('click', () => { descArea.slideToggle(100); descActions.slideToggle(100); });
+        descSave.on('click', async () => {
+            const s = getSettings();
+            const botKey = getBotKey();
+            if (s.npcData?.[botKey]?.__npcs?.[key]) {
+                s.npcData[botKey].__npcs[key].description = descArea.val().trim();
+                saveSettingsDebounced();
+                renderNPCList();
+                toastr.success('Description saved.');
+            }
+        });
+        descReset.on('click', async () => {
+            const s = getSettings();
+            const botKey = getBotKey();
+            if (s.npcData?.[botKey]?.__npcs?.[key]) {
+                const lb = s.npcData[botKey].__npcs[key].lorebookDescription || '';
+                s.npcData[botKey].__npcs[key].description = lb;
+                saveSettingsDebounced();
+                renderNPCList();
+                toastr.success('Description reset to lorebook.');
+            }
+        });
+        descRow.append(descToggle).append(descArea).append(descActions);
+        evContainer.append(descRow);
 
         // ── Permanent facts section ──────────────────────────────
         const facts = Array.isArray(npc.permanentFacts) ? npc.permanentFacts : [];
@@ -1616,7 +1702,7 @@ function renderNPCList() {
                         <div style="flex:1;">
                             <span class="wo_event_meta" style="color:${color}">${ev.positive ? '<i class="fa-solid fa-caret-up"></i>' : '<i class="fa-solid fa-caret-down"></i>'} ${ev.scale.toUpperCase()} · ${ev.category}${isMajor ? ' <i class="fa-solid fa-star" style="font-size:0.8em;color:#ffa726;"></i>' : ''}${ev.storyDate ? ' <span style="opacity:0.45;font-weight:400;font-size:0.9em;">· ' + ev.storyDate + '</span>' : ''}</span>
                             ${locTag}
-                            <div class="wo_event_text wo_event_editable" data-idx="${originalIndex}" contenteditable="true" spellcheck="false" title="Click to edit">${evText}</div>
+                            <div class="wo_event_text">${evText}</div>
                         </div>
                         <div style="display:flex;flex-direction:column;gap:2px;flex-shrink:0;">
                             ${alreadyFact ? '' : '<button class="wo_btn_promote_event menu_button" data-idx="' + originalIndex + '" title="Save as permanent fact" style="padding:0px 4px;font-size:0.75em;min-width:unset;opacity:0.55;"><i class=\"fa-solid fa-thumbtack\"></i></button>'}
@@ -1680,41 +1766,16 @@ function renderNPCList() {
                 updateInjection();
             }
         });
-
-        // Save edited event text on blur
-        evContainer.find('.wo_event_editable').on('blur', async function () {
-            const idx = parseInt($(this).attr('data-idx'));
-            if (isNaN(idx)) return;
-            const newText = $(this).text().trim();
-            if (!newText) return;
-            const n = getNPCs();
-            if (n[key] && n[key].events && n[key].events[idx]) {
-                if (n[key].events[idx].text === newText) return; // no change
-                n[key].events[idx].text = newText;
-                await saveNPCs(n);
-                updateInjection();
-                // Don't re-render — just save silently, cursor stays in place
-            }
-        }).on('keydown', function (e) {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                $(this).blur(); // save on Enter
-            }
-            if (e.key === 'Escape') {
-                // Restore original text and blur
-                const idx = parseInt($(this).attr('data-idx'));
-                const n = getNPCs();
-                if (!isNaN(idx) && n[key]?.events?.[idx]) {
-                    $(this).text(n[key].events[idx].text);
-                }
-                $(this).blur();
-            }
-        });
         
         card.find('.wo_npc_header').on('click', function (e) {
             if ($(e.target).closest('.wo_npc_actions').length) return;
             evContainer.slideToggle(150);
         });
+        card.find('.wo_btn_gen_one').on('click', async (e) => {
+            e.stopPropagation();
+            await generateForSingleNPC(key);
+        });
+
         card.find('.wo_btn_introduce').on('click', async (e) => {
             e.stopPropagation();
             const s = getSettings();
@@ -1757,15 +1818,8 @@ function renderNPCList() {
             await deleteNPC(key);
             renderNPCList(); updateInjection();
         });
-        // Restore open state if this card was open before re-render
-        if (openCards.has(key)) {
-            card.find('.wo_npc_events').show();
-        }
-
         container.append(card);
     }
-    // Refresh edit select to reflect current NPC list
-    if ($('#wo_edit_npc_select').length) populateEditSelect();
 }
 
 function buildUI() {
@@ -1790,7 +1844,7 @@ function buildUI() {
                 </div>
                 <div class="wo_accordion_body" id="wo_sec_chars">
                     <div class="wo_section_label" style="margin-top:6px;">Current Story Date</div>
-                    <div id="wo_date_display"></div>
+                    <div id="wo_date_display">—</div>
 
                     <div id="wo_npc_list" class="wo_npc_list"></div>
 
@@ -1812,7 +1866,7 @@ function buildUI() {
                     <i class="fa-solid fa-chevron-down wo_acc_icon"></i>
                 </div>
                 <div class="wo_accordion_body" id="wo_sec_lore" style="display:none;">
-                    <div id="wo_book_info" class="wo_book_info" style="margin-top:6px;"></div>
+                    <div id="wo_book_info" class="wo_book_info" style="margin-top:6px;">—</div>
                     <label style="margin-top:4px;"><small>Scan entries at position</small></label>
                     <select id="wo_scan_position" class="text_pole" style="margin-bottom:6px;">
                         <option value="before_char">before_char</option>
@@ -1831,34 +1885,16 @@ function buildUI() {
                 </div>
             </div>
 
-            <!-- ── Section: NPC Management ── -->
+            <!-- ── Section: Add NPC ── -->
             <div class="wo_accordion">
                 <div class="wo_accordion_header" data-target="wo_sec_add">
-                    <span><i class="fa-solid fa-users-gear"></i> NPC Management</span>
+                    <span><i class="fa-solid fa-user-plus"></i> Add NPC manually</span>
                     <i class="fa-solid fa-chevron-down wo_acc_icon"></i>
                 </div>
                 <div class="wo_accordion_body" id="wo_sec_add" style="display:none;">
-
-                    <div class="wo_section_label" style="margin-top:6px;">Add new NPC</div>
-                    <input type="text" id="wo_manual_name" class="text_pole" placeholder="Name" style="margin-bottom:4px;" />
+                    <input type="text" id="wo_manual_name" class="text_pole" placeholder="Name" style="margin-top:6px;margin-bottom:4px;" />
                     <textarea id="wo_manual_desc" class="text_pole" placeholder="Description (optional)" rows="3" style="resize:vertical;margin-bottom:4px;"></textarea>
                     <button id="wo_manual_add" class="menu_button" style="width:100%;"><i class="fa-solid fa-user-plus"></i> Add NPC</button>
-
-                    <div class="wo_section_label" style="margin-top:12px;">Edit existing NPC</div>
-                    <select id="wo_edit_npc_select" class="text_pole" style="margin-bottom:6px;">
-                        <option value="">— select NPC —</option>
-                    </select>
-                    <div id="wo_edit_npc_panel" style="display:none;">
-                        <label><small>Notes <span style="opacity:0.5;">(always sent to AI, overrides lorebook if contradicts)</span></small></label>
-                        <textarea id="wo_edit_notes" class="text_pole" placeholder="e.g. currently pregnant, in conflict with Parfyonov..." rows="2" style="resize:vertical;margin-bottom:6px;"></textarea>
-                        <label><small>Description</small></label>
-                        <textarea id="wo_edit_desc" class="text_pole" rows="5" style="resize:vertical;margin-bottom:4px;"></textarea>
-                        <div class="wo_actions">
-                            <button id="wo_edit_save" class="menu_button"><i class="fa-solid fa-floppy-disk"></i> Save</button>
-                            <button id="wo_edit_reset" class="menu_button" style="opacity:0.6;" title="Restore lorebook description"><i class="fa-solid fa-rotate-left"></i> Reset desc</button>
-                        </div>
-                    </div>
-
                 </div>
             </div>
 
@@ -1924,9 +1960,9 @@ jQuery(async () => {
             const chat = ctx.chat || [];
             const lastMsg = [...chat].reverse().find(m => m.mes && hasDatePattern(m.mes));
             const dateStr = lastMsg ? extractDateFromMessage(lastMsg.mes) : null;
-            $('#wo_date_display').text(dateStr || '');
+            $('#wo_date_display').text(dateStr || 'No date found in history');
         } catch(e) {
-            $('#wo_date_display').text('');
+            $('#wo_date_display').text('—');
         }
     }
 
@@ -2064,51 +2100,6 @@ jQuery(async () => {
         toastr.success(`"${name}" added.`);
     });
 
-    // Edit NPC panel
-    populateEditSelect();
-
-    $('#wo_edit_npc_select').on('change', function() {
-        const name = this.value;
-        if (!name) { $('#wo_edit_npc_panel').hide(); return; }
-        const npcs = getNPCs();
-        const npc = npcs[name];
-        if (!npc) return;
-        $('#wo_edit_notes').val(npc.notes || '');
-        $('#wo_edit_desc').val(npc.description || '');
-        $('#wo_edit_npc_panel').show();
-    });
-
-    $('#wo_edit_save').on('click', async () => {
-        const name = $('#wo_edit_npc_select').val();
-        if (!name) return;
-        const s = getSettings();
-        const botKey = getBotKey();
-        if (!s.npcData?.[botKey]?.__npcs?.[name]) return;
-        s.npcData[botKey].__npcs[name].notes = $('#wo_edit_notes').val().trim();
-        s.npcData[botKey].__npcs[name].description = $('#wo_edit_desc').val().trim();
-        saveSettingsDebounced();
-        renderNPCList();
-        populateEditSelect();
-        toastr.success('NPC updated.');
-    });
-
-    $('#wo_edit_reset').on('click', async () => {
-        const name = $('#wo_edit_npc_select').val();
-        if (!name) return;
-        const s = getSettings();
-        const botKey = getBotKey();
-        if (!s.npcData?.[botKey]?.__npcs?.[name]) return;
-        const lb = s.npcData[botKey].__npcs[name].lorebookDescription || '';
-        s.npcData[botKey].__npcs[name].description = lb;
-        $('#wo_edit_desc').val(lb);
-        saveSettingsDebounced();
-        renderNPCList();
-        toastr.success('Description reset to lorebook.');
-    });
-
-    // Refresh edit select when NPC list changes
-    const _origRenderNPCList = renderNPCList;
-
     $('#wo_generate_now').on('click', async () => {
         if (!getConnectionProfiles().length) {
             toastr.error('No ST Connection Profiles found. Create one in SillyTavern settings first.');
@@ -2118,21 +2109,15 @@ jQuery(async () => {
     });
 
     
-    // Shared handler for bot message — called by both CHARACTER_MESSAGE_RENDERED and MESSAGE_RECEIVED
-    // Uses lastProcessedMsgId to deduplicate (both events can fire for same message)
-    async function onBotMessageDone() {
+    // CHARACTER_MESSAGE_RENDERED fires after the bot finishes writing — safe to count here.
+    // This avoids the re-entrant loop that GENERATION_STARTED caused (it fires during our own callAPI too).
+    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, async () => {
         updateDateDisplay();
 
-        // Auto-clear pendingIntro if NPC appeared in infoblock
+        // Auto-clear pendingIntro if NPC appeared in infoblock; clear activeIntros (one-shot)
         try {
             const ctx = SillyTavern.getContext();
             const lastMsg = (ctx.chat || []).slice(-1)[0];
-
-            // Deduplicate: skip if already processed this message
-            const msgId = lastMsg?.send_date + '_' + (lastMsg?.mes?.length || 0);
-            if (msgId === lastProcessedMsgId) return;
-            lastProcessedMsgId = msgId;
-
             if (lastMsg?.mes) {
                 const s = getSettings();
                 const botKey = getBotKey();
@@ -2144,7 +2129,9 @@ jQuery(async () => {
                         if (s.activeIntros) delete s.activeIntros[name];
                         changed = true;
                         toastr.success(`${name} has entered the scene!`);
+                        console.log('[WildOffscreen] pendingIntro cleared for', name);
                     } else if (s.activeIntros?.[name]) {
+                        // One-shot fired but NPC didn't appear yet — clear active flag anyway
                         delete s.activeIntros[name];
                         changed = true;
                     }
@@ -2153,7 +2140,7 @@ jQuery(async () => {
             }
         } catch(e) {}
 
-        if (isGenerating) return;
+        if (isGenerating) return; // our own API call, ignore
 
         const s = getSettings();
         if (!s.enabled) return;
@@ -2165,12 +2152,13 @@ jQuery(async () => {
             lastChatLength = currentLength;
 
             if (isReroll) {
-                console.log('[WildOffscreen] Reroll detected — removing last events');
+                console.log('[WildOffscreen] Reroll detected — removing last events (permanentFacts untouched)');
                 const npcs = getNPCs();
                 let removed = 0;
                 for (const key of Object.keys(npcs)) {
                     if (npcs[key].enabled && npcs[key].events.length > 0) {
                         npcs[key].events.pop();
+                        // permanentFacts are deliberately NOT touched on reroll
                         removed++;
                     }
                 }
@@ -2179,23 +2167,19 @@ jQuery(async () => {
                     renderNPCList();
                     updateInjection();
                 }
+                // Force generation this turn
                 msgCounter = s.triggerEvery;
             }
         } catch(e) {
-            console.warn('[WildOffscreen] onBotMessageDone error:', e.message);
+            console.warn('[WildOffscreen] CHARACTER_MESSAGE_RENDERED error:', e.message);
         }
 
         msgCounter++;
-        console.log('[WildOffscreen] msgCounter:', msgCounter, '/', s.triggerEvery);
         if (msgCounter >= s.triggerEvery) {
             msgCounter = 0;
             runGenerationCycle();
         }
-    }
-
-    // Two events for redundancy — whichever fires first processes, second is deduped
-    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, onBotMessageDone);
-    eventSource.on(event_types.MESSAGE_RECEIVED, onBotMessageDone);
+    });
 
     eventSource.on(event_types.USER_MESSAGE_RENDERED, () => {
         updateDateDisplay();
