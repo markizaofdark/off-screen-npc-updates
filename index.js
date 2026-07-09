@@ -400,6 +400,7 @@ const CATEGORIES = Object.keys(EVENT_POOLS.minor);
 let msgCounter = 0;
 let lastChatLength = 0;  // tracks chat size to detect rerolls
 let isGenerating = false; // guard against re-entrant generation
+let lastProcessedMsgId = null; // deduplicate MESSAGE_RECEIVED + CHARACTER_MESSAGE_RENDERED
 
 // ── Settings ───────────────────────────────────────────────
 
@@ -1615,7 +1616,7 @@ function renderNPCList() {
                         <div style="flex:1;">
                             <span class="wo_event_meta" style="color:${color}">${ev.positive ? '<i class="fa-solid fa-caret-up"></i>' : '<i class="fa-solid fa-caret-down"></i>'} ${ev.scale.toUpperCase()} · ${ev.category}${isMajor ? ' <i class="fa-solid fa-star" style="font-size:0.8em;color:#ffa726;"></i>' : ''}${ev.storyDate ? ' <span style="opacity:0.45;font-weight:400;font-size:0.9em;">· ' + ev.storyDate + '</span>' : ''}</span>
                             ${locTag}
-                            <div class="wo_event_text">${evText}</div>
+                            <div class="wo_event_text wo_event_editable" data-idx="${originalIndex}" contenteditable="true" spellcheck="false" title="Click to edit">${evText}</div>
                         </div>
                         <div style="display:flex;flex-direction:column;gap:2px;flex-shrink:0;">
                             ${alreadyFact ? '' : '<button class="wo_btn_promote_event menu_button" data-idx="' + originalIndex + '" title="Save as permanent fact" style="padding:0px 4px;font-size:0.75em;min-width:unset;opacity:0.55;"><i class=\"fa-solid fa-thumbtack\"></i></button>'}
@@ -1677,6 +1678,36 @@ function renderNPCList() {
                 await saveNPCs(n);
                 renderNPCList();
                 updateInjection();
+            }
+        });
+
+        // Save edited event text on blur
+        evContainer.find('.wo_event_editable').on('blur', async function () {
+            const idx = parseInt($(this).attr('data-idx'));
+            if (isNaN(idx)) return;
+            const newText = $(this).text().trim();
+            if (!newText) return;
+            const n = getNPCs();
+            if (n[key] && n[key].events && n[key].events[idx]) {
+                if (n[key].events[idx].text === newText) return; // no change
+                n[key].events[idx].text = newText;
+                await saveNPCs(n);
+                updateInjection();
+                // Don't re-render — just save silently, cursor stays in place
+            }
+        }).on('keydown', function (e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                $(this).blur(); // save on Enter
+            }
+            if (e.key === 'Escape') {
+                // Restore original text and blur
+                const idx = parseInt($(this).attr('data-idx'));
+                const n = getNPCs();
+                if (!isNaN(idx) && n[key]?.events?.[idx]) {
+                    $(this).text(n[key].events[idx].text);
+                }
+                $(this).blur();
             }
         });
         
@@ -1819,7 +1850,7 @@ function buildUI() {
                     </select>
                     <div id="wo_edit_npc_panel" style="display:none;">
                         <label><small>Notes <span style="opacity:0.5;">(always sent to AI, overrides lorebook if contradicts)</span></small></label>
-                        <textarea id="wo_edit_notes" class="text_pole" rows="2" style="resize:vertical;margin-bottom:6px;"></textarea>
+                        <textarea id="wo_edit_notes" class="text_pole" placeholder="e.g. currently pregnant, in conflict with Parfyonov..." rows="2" style="resize:vertical;margin-bottom:6px;"></textarea>
                         <label><small>Description</small></label>
                         <textarea id="wo_edit_desc" class="text_pole" rows="5" style="resize:vertical;margin-bottom:4px;"></textarea>
                         <div class="wo_actions">
@@ -2087,15 +2118,21 @@ jQuery(async () => {
     });
 
     
-    // CHARACTER_MESSAGE_RENDERED fires after the bot finishes writing — safe to count here.
-    // This avoids the re-entrant loop that GENERATION_STARTED caused (it fires during our own callAPI too).
-    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, async () => {
+    // Shared handler for bot message — called by both CHARACTER_MESSAGE_RENDERED and MESSAGE_RECEIVED
+    // Uses lastProcessedMsgId to deduplicate (both events can fire for same message)
+    async function onBotMessageDone() {
         updateDateDisplay();
 
-        // Auto-clear pendingIntro if NPC appeared in infoblock; clear activeIntros (one-shot)
+        // Auto-clear pendingIntro if NPC appeared in infoblock
         try {
             const ctx = SillyTavern.getContext();
             const lastMsg = (ctx.chat || []).slice(-1)[0];
+
+            // Deduplicate: skip if already processed this message
+            const msgId = lastMsg?.send_date + '_' + (lastMsg?.mes?.length || 0);
+            if (msgId === lastProcessedMsgId) return;
+            lastProcessedMsgId = msgId;
+
             if (lastMsg?.mes) {
                 const s = getSettings();
                 const botKey = getBotKey();
@@ -2107,9 +2144,7 @@ jQuery(async () => {
                         if (s.activeIntros) delete s.activeIntros[name];
                         changed = true;
                         toastr.success(`${name} has entered the scene!`);
-                        console.log('[WildOffscreen] pendingIntro cleared for', name);
                     } else if (s.activeIntros?.[name]) {
-                        // One-shot fired but NPC didn't appear yet — clear active flag anyway
                         delete s.activeIntros[name];
                         changed = true;
                     }
@@ -2118,7 +2153,7 @@ jQuery(async () => {
             }
         } catch(e) {}
 
-        if (isGenerating) return; // our own API call, ignore
+        if (isGenerating) return;
 
         const s = getSettings();
         if (!s.enabled) return;
@@ -2130,13 +2165,12 @@ jQuery(async () => {
             lastChatLength = currentLength;
 
             if (isReroll) {
-                console.log('[WildOffscreen] Reroll detected — removing last events (permanentFacts untouched)');
+                console.log('[WildOffscreen] Reroll detected — removing last events');
                 const npcs = getNPCs();
                 let removed = 0;
                 for (const key of Object.keys(npcs)) {
                     if (npcs[key].enabled && npcs[key].events.length > 0) {
                         npcs[key].events.pop();
-                        // permanentFacts are deliberately NOT touched on reroll
                         removed++;
                     }
                 }
@@ -2145,19 +2179,23 @@ jQuery(async () => {
                     renderNPCList();
                     updateInjection();
                 }
-                // Force generation this turn
                 msgCounter = s.triggerEvery;
             }
         } catch(e) {
-            console.warn('[WildOffscreen] CHARACTER_MESSAGE_RENDERED error:', e.message);
+            console.warn('[WildOffscreen] onBotMessageDone error:', e.message);
         }
 
         msgCounter++;
+        console.log('[WildOffscreen] msgCounter:', msgCounter, '/', s.triggerEvery);
         if (msgCounter >= s.triggerEvery) {
             msgCounter = 0;
             runGenerationCycle();
         }
-    });
+    }
+
+    // Two events for redundancy — whichever fires first processes, second is deduped
+    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, onBotMessageDone);
+    eventSource.on(event_types.MESSAGE_RECEIVED, onBotMessageDone);
 
     eventSource.on(event_types.USER_MESSAGE_RENDERED, () => {
         updateDateDisplay();

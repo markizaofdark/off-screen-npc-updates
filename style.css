@@ -460,3 +460,24 @@ button.menu_button {
     padding: 2px 0;
     font-size: 0.78em !important;
 }
+
+/* ── Editable event text ────────────────────────────── */
+
+.wo_event_editable {
+    cursor: text;
+    border-radius: 3px;
+    padding: 2px 4px;
+    margin: 0 -4px;
+    transition: background 0.15s;
+    outline: none;
+    min-height: 1.4em;
+}
+
+.wo_event_editable:hover {
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 8%, transparent);
+}
+
+.wo_event_editable:focus {
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 12%, transparent);
+    outline: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor) 40%, transparent);
+}
