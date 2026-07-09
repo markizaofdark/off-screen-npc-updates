@@ -35,7 +35,9 @@ const DEFAULTS = {
     outputLanguage: 'en',
     scanPosition: 'before_char',
     sceneMode: 'infoblock',   // 'infoblock' | 'text'
-    textModeDepth: 2,         // how many bot messages to scan in text mode
+    infoblockKeywordScan: false, // infoblock mode: also scan recent messages by keywords
+    keywordScanDepth: 2,      // how many bot messages to scan (both modes)
+    textModeDepth: 2,         // kept for compatibility, mirrors keywordScanDepth in text mode
     minutesPerExchange: 5,    // minutes added per user+bot exchange in text mode
 };
 
@@ -1519,26 +1521,22 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext, sceneInfo)
         const searchKeys = Array.isArray(npc.searchKeys) ? npc.searchKeys : [];
         if (s2.sceneMode === 'text') {
             // Text mode: check if NPC appears in recent bot messages
-            inScene = npcInRecentMessages(npc, s2.textModeDepth || 2);
+            inScene = npcInRecentMessages(npc, s2.keywordScanDepth || s2.textModeDepth || 2);
             console.log('[WildOffscreen] TEXT MODE — NPC', npc.name, '→', inScene ? 'IN SCENE' : 'OFFSCREEN');
         } else if (sceneChars.length > 0) {
+            // Infoblock mode: direct name match, + optional keyword scan
             const npcNameLower = npc.name.toLowerCase();
-            const sceneText = sceneChars.join(', ');
-            // Direct name match
-            const directSceneMatch = sceneChars.some(c => {
+            const directMatch = sceneChars.some(c => {
                 if (!c || typeof c !== 'string') return false;
                 const cl = c.toLowerCase().trim();
                 return cl === npcNameLower || cl.includes(npcNameLower);
             });
-            // Key match (plain + regex)
-            const keySceneMatch = !directSceneMatch && searchKeys.some(k => {
-                if (!k || typeof k !== 'string') return false;
-                const rx = parseKeyAsRegex(k);
-                if (rx) return rx.test(sceneText);
-                return k.length >= 2 && sceneText.toLowerCase().includes(k.toLowerCase());
-            });
-            inScene = directSceneMatch || keySceneMatch;
-            console.log('[WildOffscreen] INFOBLOCK MODE — NPC', npc.name, '→', inScene ? 'IN SCENE' : 'OFFSCREEN', '| sceneChars:', sceneChars);
+            const kwMatch = s2.infoblockKeywordScan && !directMatch
+                ? npcInRecentMessages(npc, s2.keywordScanDepth || 2)
+                : false;
+            inScene = directMatch || kwMatch;
+            console.log('[WildOffscreen] INFOBLOCK MODE — NPC', npc.name, '→', inScene ? 'IN SCENE' : 'OFFSCREEN',
+                '| direct:', directMatch, 'keyword:', kwMatch);
         } else {
             console.log('[WildOffscreen] INFOBLOCK MODE — no sceneChars found, NPC', npc.name, '→ OFFSCREEN (no infoblock parsed)');
         } // end infoblock mode
@@ -1772,18 +1770,14 @@ async function generateEventsForAllNPCs(npcs) {
             console.log('[WildOffscreen] isInSceneCheck TEXT', npc.name, '→', r);
             return r;
         }
-        const sceneText = sceneCharsForFilter.join(', ');
+        // Infoblock mode: ONLY match against characters explicitly listed in the infoblock
+        // Search keys are NOT used here — they are for lorebook scanning, not scene detection
         const nl = npc.name.toLowerCase();
-        const sk = Array.isArray(npc.searchKeys) ? npc.searchKeys : [];
-        const direct = sceneCharsForFilter.some(c => { const cl = (c || '').toLowerCase().trim(); return cl === nl || cl.includes(nl); });
-        const keyMatch = !direct && sk.some(k => {
-            if (!k || typeof k !== 'string') return false;
-            const rx = parseKeyAsRegex(k);
-            if (rx) return rx.test(sceneText);
-            return k.length >= 2 && sceneText.toLowerCase().includes(k.toLowerCase());
+        const result = sceneCharsForFilter.some(c => {
+            const cl = (c || '').toLowerCase().trim();
+            return cl === nl || cl.includes(nl);
         });
-        const result = direct || keyMatch;
-        console.log('[WildOffscreen] isInSceneCheck INFOBLOCK', npc.name, '→', result, '| direct:', direct, 'keyMatch:', keyMatch, '| sceneText:', sceneText);
+        console.log('[WildOffscreen] isInSceneCheck INFOBLOCK', npc.name, '→', result, '| sceneChars:', sceneCharsForFilter);
         return result;
     };
 
@@ -1937,11 +1931,11 @@ function buildInjectionText(npcs, injectMax) {
     if (!filtered.length) return '';
     const lines = filtered.map(npc => {
         const loc = npc.lastLocation || 'unknown';
-        const evLines = npc.events.slice(-3).map(e => {
-            const evLoc = e.location && e.location !== loc ? ' @' + e.location : '';
-            return '  [' + (e.positive ? '+' : '-') + e.scale.toUpperCase() + evLoc + '] ' + e.text;
-        }).join('\n');
-        return '• ' + npc.name + ' (currently: ' + loc + '):\n' + evLines;
+        // Inject only last event to keep context size small
+        const last = npc.events[npc.events.length - 1];
+        const evLoc = last && last.location && last.location !== loc ? ' @' + last.location : '';
+        const evLine = last ? '  [' + (last.positive ? '+' : '-') + last.scale.toUpperCase() + evLoc + '] ' + last.text : '  —';
+        return npc.name + ' (' + loc + '): ' + evLine.trim();
     });
     const s2 = getSettings();
     const activeIntros = s2.activeIntros || {};
@@ -1954,30 +1948,25 @@ function buildInjectionText(npcs, injectMax) {
 
     let introNote = '';
     if (forceIntroNPCs.length) {
-        introNote += '\n\n[!!! MANDATORY — DO NOT SKIP !!!]\n'
-            + 'You MUST introduce the following character(s) into THIS response, right now: '
+        introNote += '\n\n[SCENE DIRECTION — REQUIRED]\n'
+            + 'Introduce the following character(s) into this response: '
             + forceIntroNPCs.map(n => n.name).join(', ') + '.\n'
-            + 'This is not a suggestion. This character MUST physically appear or be directly referenced in the scene you are about to write.\n'
-            + 'Requirements:\n'
-            + '- They must enter, arrive, be encountered, or make their presence known within this very message\n'
-            + '- The introduction must feel natural and consistent with the current location, time of day, and tone of the scene\n'
-            + '- Do NOT delay it to the next message. Do NOT hint at their arrival. Make it happen NOW.\n';
+            + 'They must appear or be directly referenced in this message — not hinted at, not delayed.\n'
+            + 'The introduction must feel natural and fit the current location, time, and tone.\n';
 
-        // Include lorebook description for each forced character so the main model knows who they are
-        // (lorebook entries may be keyword-triggered and might not be in context)
         for (const npc of forceIntroNPCs) {
             const desc = (npc.lorebookDescription || npc.description || '').trim();
             if (desc) {
-                introNote += '\nCHARACTER INFO — ' + npc.name + ':\n' + desc + '\n';
+                introNote += '\nCharacter: ' + npc.name + '\n' + desc + '\n';
             }
         }
-        introNote += '[!!! END MANDATORY !!!]';
+        introNote += '[END SCENE DIRECTION]';
     }
     if (passiveIntroNames.length) {
-        introNote += '\n[PENDING: ' + passiveIntroNames.join(', ') + ' — exists in this world, introduce naturally when the moment fits.]';
+        introNote += '\n[Note: ' + passiveIntroNames.join(', ') + ' exist in this world and may be introduced when the moment fits naturally.]';
     }
 
-    return '[OFF-SCREEN NPC UPDATES — use when character enters scene. Do NOT generate this block yourself.]\n'
+    return '[OFF-SCREEN NPC UPDATES]\n'
         + lines.join('\n') + '\n[/OFF-SCREEN NPC UPDATES]'
         + introNote;
 }
@@ -2359,6 +2348,13 @@ function buildUI() {
                         <option value="before_char">before_char</option>
                         <option value="after_char">after_char</option>
                     </select>
+                    <div class="wo_section_label">Scene Detection (Info Block mode)</div>
+                    <label class="checkbox_label">
+                        <input type="checkbox" id="wo_keyword_scan" ${s.infoblockKeywordScan ? 'checked' : ''} />
+                        <span>Also scan recent messages by keywords</span>
+                    </label>
+                    <label><small>Messages to scan for keywords</small></label>
+                    <input type="number" id="wo_keyword_depth" class="text_pole" value="${s.keywordScanDepth || 2}" min="1" max="20" />
                     <div class="wo_section_label">Token Context</div>
                     <label><small>Messages history depth</small></label>
                     <input type="number" id="wo_max_messages" class="text_pole" value="${s.maxMessages || 30}" />
@@ -2626,6 +2622,8 @@ jQuery(async () => {
     $('#wo_max_messages').on('input', function() { s.maxMessages = parseInt(this.value) || 30; saveSettingsDebounced(); });
     $('#wo_max_chars').on('input', function() { s.maxCharsPerMsg = parseInt(this.value) || 2000; saveSettingsDebounced(); });
 
+    $('#wo_keyword_scan').on('change', function () { s.infoblockKeywordScan = this.checked; saveSettingsDebounced(); });
+    $('#wo_keyword_depth').on('input', function () { s.keywordScanDepth = parseInt(this.value) || 2; saveSettingsDebounced(); });
     $('#wo_trigger_every').on('input', function () { s.triggerEvery = parseInt(this.value) || DEFAULTS.triggerEvery; saveSettingsDebounced(); });
     $('#wo_max_events').on('input', function () { s.maxEvents = parseInt(this.value) || DEFAULTS.maxEvents; saveSettingsDebounced(); });
     $('#wo_inject_max').on('input', function () { s.injectMaxMessages = parseInt(this.value) || 0; saveSettingsDebounced(); });
