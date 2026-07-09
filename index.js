@@ -1267,7 +1267,7 @@ async function generateEventsForAllNPCs(npcs) {
 
     if (!offscreenKeys.length) {
         console.log('[WildOffscreen] All NPCs in scene, nothing to generate.');
-        return;
+        return 'all_in_scene';
     }
 
     const npcList = offscreenKeys.map(k => ({ npc: npcs[k], key: k, params: rollEventParams() }));
@@ -1351,30 +1351,25 @@ async function runGenerationCycle() {
     $('#wo_status').text('Generating offscreen events…').show();
 
     try {
+        // Snapshot event counts before generation
         const beforeCounts = Object.fromEntries(keys.map(k => [k, npcs[k].events.length]));
 
-        // Figure out which NPCs are offscreen (expect events) vs in-scene (expect nothing)
-        const sceneInfo = parseSceneInfo();
-        const sceneChars = (sceneInfo && Array.isArray(sceneInfo.characters)) ? sceneInfo.characters : [];
-        const isInScene = (npc) => sceneChars.some(c => {
-            if (!c || typeof c !== 'string') return false;
-            const cl = c.toLowerCase().trim();
-            const nl = npc.name.toLowerCase();
-            const sk = Array.isArray(npc.searchKeys) ? npc.searchKeys : [];
-            return cl === nl || cl.includes(nl) || nl.includes(cl)
-                || sk.some(k => k && typeof k === 'string' && cl.includes(k.toLowerCase()));
-        });
-        const offscreenKeys = keys.filter(k => !isInScene(npcs[k]));
-        const inSceneKeys   = keys.filter(k =>  isInScene(npcs[k]));
-        console.log('[WildOffscreen] Offscreen:', offscreenKeys.length, '| In scene:', inSceneKeys.length);
+        // generateEventsForAllNPCs handles in-scene filtering and saving internally
+        const result = await generateEventsForAllNPCs(npcs);
 
-        await generateEventsForAllNPCs(npcs);
+        // If it returned 'all_in_scene', nothing to do
+        if (result === 'all_in_scene') {
+            toastr.info('All active NPCs are currently in scene — no offscreen events generated.');
+            updateInjection(); renderNPCList();
+            return;
+        }
 
-        // Re-fetch after generation since generateEventsForAllNPCs saves internally
+        // Re-fetch and check results
         let npcsAfter = getNPCs();
-        const firstGenerated = offscreenKeys.filter(k => (npcsAfter[k]?.events.length || 0) > beforeCounts[k]).length;
-        if (firstGenerated === 0 && offscreenKeys.length > 0) {
-            console.log('[WildOffscreen] First attempt got 0 offscreen results, retrying...');
+        const newEventKeys = keys.filter(k => npcsAfter[k] && (npcsAfter[k].events.length || 0) > (beforeCounts[k] || 0));
+
+        if (newEventKeys.length === 0) {
+            console.log('[WildOffscreen] First attempt got 0 results, retrying...');
             await new Promise(r => setTimeout(r, 1500));
             await generateEventsForAllNPCs(getNPCs());
             npcsAfter = getNPCs();
@@ -1383,18 +1378,15 @@ async function runGenerationCycle() {
         updateInjection();
         renderNPCList();
 
-        const generated = offscreenKeys.filter(k => (npcsAfter[k]?.events.length || 0) > beforeCounts[k]).length;
-        const failed = offscreenKeys.length - generated;
+        const generated = keys.filter(k => npcsAfter[k] && (npcsAfter[k].events.length || 0) > (beforeCounts[k] || 0)).length;
+        console.log('[WildOffscreen] Generated events for', generated, '/', keys.length, 'active NPCs');
 
-        if (offscreenKeys.length === 0 && inSceneKeys.length > 0) {
-            toastr.info(`All ${inSceneKeys.length} NPC(s) are currently in scene — no offscreen events generated.`);
-        } else if (generated === 0 && offscreenKeys.length > 0) {
+        if (generated === 0) {
             toastr.error('Generation failed. Check your connection profile and model.');
-        } else if (failed > 0) {
-            toastr.warning(`Generated events for ${generated}/${offscreenKeys.length} offscreen NPCs.`);
+        } else if (generated < keys.length) {
+            toastr.warning(`Generated events for ${generated}/${keys.length} NPCs.`);
         } else {
-            const inSceneNote = inSceneKeys.length ? ` (${inSceneKeys.length} in scene, skipped)` : '';
-            toastr.success(`Generated events for all ${generated} offscreen NPCs.` + inSceneNote);
+            toastr.success(`Generated events for all ${generated} NPCs.`);
         }
     } catch(e) {
         console.error('[WildOffscreen] runGenerationCycle error:', e.message);
@@ -1812,7 +1804,7 @@ function buildUI() {
                     </select>
                     <div id="wo_edit_npc_panel" style="display:none;">
                         <label><small>Notes <span style="opacity:0.5;">(always sent to AI, overrides lorebook if contradicts)</span></small></label>
-                        <textarea id="wo_edit_notes" class="text_pole" placeholder="any notes for this character..." rows="2" style="resize:vertical;margin-bottom:6px;"></textarea>
+                        <textarea id="wo_edit_notes" class="text_pole" placeholder="e.g. currently pregnant, in conflict with Parfyonov..." rows="2" style="resize:vertical;margin-bottom:6px;"></textarea>
                         <label><small>Description</small></label>
                         <textarea id="wo_edit_desc" class="text_pole" rows="5" style="resize:vertical;margin-bottom:4px;"></textarea>
                         <div class="wo_actions">
