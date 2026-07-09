@@ -34,6 +34,9 @@ const DEFAULTS = {
     maxTokens: 200,
     outputLanguage: 'en',
     scanPosition: 'before_char',
+    sceneMode: 'infoblock',   // 'infoblock' | 'text'
+    textModeDepth: 2,         // how many bot messages to scan in text mode
+    minutesPerExchange: 5,    // minutes added per user+bot exchange in text mode
 };
 
 const LANGUAGE_INSTRUCTION = {
@@ -822,6 +825,43 @@ function getChatStore() {
     return store[chatKey];
 }
 
+// ── Internal time (text mode) ──────────────────────────
+
+function getInternalTime() {
+    const s = getSettings();
+    const botKey = getBotKey();
+    const chatKey = getChatKey();
+    const raw = s.npcData?.[botKey]?.[chatKey]?.__internalTime;
+    return raw || null; // { date: 'YYYY/MM/DD', time: 'HH:MM' } or null
+}
+
+function saveInternalTime(dateStr, timeStr) {
+    const s = getSettings();
+    const botKey = getBotKey();
+    const chatKey = getChatKey();
+    if (!s.npcData) s.npcData = {};
+    if (!s.npcData[botKey]) s.npcData[botKey] = { __npcs: {} };
+    if (!s.npcData[botKey][chatKey]) s.npcData[botKey][chatKey] = {};
+    s.npcData[botKey][chatKey].__internalTime = { date: dateStr, time: timeStr };
+    saveSettingsDebounced();
+}
+
+function advanceInternalTime() {
+    const s = getSettings();
+    const current = getInternalTime();
+    if (!current) return null;
+
+    const minutes = s.minutesPerExchange || 5;
+    const [h, m] = current.time.split(':').map(Number);
+    const totalMin = h * 60 + m + minutes;
+    const newH = Math.floor(totalMin / 60) % 24;
+    const newM = totalMin % 60;
+    // Handle day rollover simply — keep same date (for simplicity, days don't advance)
+    const newTime = String(newH).padStart(2, '0') + ':' + String(newM).padStart(2, '0');
+    saveInternalTime(current.date, newTime);
+    return { date: current.date, time: newTime };
+}
+
 /** Returns merged NPC objects: identity from __npcs + runtime data from chatStore */
 function getNPCs() {
     const store = getNPCStore();
@@ -898,6 +938,7 @@ async function clearChatData() {
         delete s.npcData[botKey][chatKey];
     }
     saveSettingsDebounced();
+    updateDateDisplay();
 }
 
 // ── NPC entry detection ────────────────────────────────────
@@ -1333,32 +1374,63 @@ function npcInInfoblock(npc, mes) {
     const chars = parseInfoblockChars(mes);
     if (!chars.length) return false;
 
-    // Join all character names into a single string for regex testing
     const charsText = chars.join(', ');
     const npcLower  = npc.name.toLowerCase();
 
-    // 1. Direct name match against each character entry
     const directMatch = chars.some(c => {
         const cl = c.toLowerCase().trim();
         return cl === npcLower || cl.includes(npcLower);
     });
     if (directMatch) return true;
 
-    // 2. Search keys — plain strings and /regex/ patterns
     const keys = Array.isArray(npc.searchKeys) ? npc.searchKeys : [];
     for (const key of keys) {
         if (!key || typeof key !== 'string') continue;
         const rx = parseKeyAsRegex(key);
         if (rx) {
-            // Regex key: test against the full chars text
             if (rx.test(charsText)) return true;
         } else {
-            // Plain string key: case-insensitive substring match
             if (key.length >= 2 && charsText.toLowerCase().includes(key.toLowerCase())) return true;
         }
     }
-
     return false;
+}
+
+/**
+ * Text-mode scene detection: check if NPC is mentioned in the last N bot messages.
+ * Uses name + searchKeys (plain and regex) against raw message text.
+ */
+function npcInRecentMessages(npc, depth) {
+    try {
+        const ctx = SillyTavern.getContext();
+        const chat = ctx.chat || [];
+        // Get last `depth` bot messages
+        const botMsgs = [...chat].reverse().filter(m => !m.is_user && !m.is_system && m.mes).slice(0, depth);
+        if (!botMsgs.length) return false;
+
+        const npcLower = npc.name.toLowerCase();
+        const keys = Array.isArray(npc.searchKeys) ? npc.searchKeys : [];
+        const nameParts = npc.name.trim().split(/\s+/).filter(p => p.length > 2);
+
+        for (const msg of botMsgs) {
+            const text = msg.mes.replace(/<[^>]+>/g, '').toLowerCase();
+
+            // Direct name match
+            if (text.includes(npcLower)) return true;
+
+            // Name parts
+            if (nameParts.some(p => text.includes(p.toLowerCase()))) return true;
+
+            // Search keys
+            for (const key of keys) {
+                if (!key || typeof key !== 'string') continue;
+                const rx = parseKeyAsRegex(key);
+                if (rx) { if (rx.test(text)) return true; }
+                else if (key.length >= 2 && text.includes(key.toLowerCase())) return true;
+            }
+        }
+        return false;
+    } catch(e) { return false; }
 }
 
 // ── Chat context ───────────────────────────────────────────
@@ -1372,8 +1444,12 @@ function getChatContextForNPC(npc, maxMessages = 30, maxCharsPerMsg = 3000) {
         const chat = ctx.chat || [];
         const nonSystem = chat.filter(m => !m.is_system && m.mes);
 
-        // Find messages where this NPC appears in the infoblock character list
-        const withNPC = nonSystem.filter(m => npcInInfoblock(npcObj, m.mes));
+        // Find messages where this NPC appears — infoblock or text scan depending on mode
+        const _ctxMode = getSettings().sceneMode || 'infoblock';
+        const withNPC = nonSystem.filter(m => {
+            if (_ctxMode === 'text') return npcInRecentMessages(npcObj, 999); // scan all for context
+            return npcInInfoblock(npcObj, m.mes);
+        });
 
         let selected;
         if (withNPC.length > 0) {
@@ -1438,10 +1514,14 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext, sceneInfo)
 
         // Detect if this NPC is currently in the active scene
         let inScene = false;
+        const s2 = getSettings();
         const sceneChars = (sceneInfo && Array.isArray(sceneInfo.characters)) ? sceneInfo.characters : [];
-        if (sceneChars.length > 0) {
+        const searchKeys = Array.isArray(npc.searchKeys) ? npc.searchKeys : [];
+        if (s2.sceneMode === 'text') {
+            // Text mode: check if NPC appears in recent bot messages
+            inScene = npcInRecentMessages(npc, s2.textModeDepth || 2);
+        } else if (sceneChars.length > 0) {
             const npcNameLower = npc.name.toLowerCase();
-            const searchKeys = Array.isArray(npc.searchKeys) ? npc.searchKeys : [];
             const sceneText = sceneChars.join(', ');
             // Direct name match
             const directSceneMatch = sceneChars.some(c => {
@@ -1457,7 +1537,7 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext, sceneInfo)
                 return k.length >= 2 && sceneText.toLowerCase().includes(k.toLowerCase());
             });
             inScene = directSceneMatch || keySceneMatch;
-        }
+        } // end infoblock mode
 
         const facts = Array.isArray(npc.permanentFacts) ? npc.permanentFacts : [];
         const factsBlock = facts.length
@@ -1484,6 +1564,16 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext, sceneInfo)
                     + 'Write ONE sentence (15-30 words) that applies this archetype to THIS specific character — their personality, situation, relationships, and context. Be concrete and specific to them, not generic.');
     }).join('\n\n');
 
+    // In text mode, build a minimal sceneInfo substitute (no infoblock)
+    const _bsMode = getSettings().sceneMode || 'infoblock';
+    if (_bsMode === 'text' && !sceneInfo) {
+        const it = getInternalTime();
+        if (it) {
+            // sceneInfo stays null — no character list, time comes from internal clock
+            // We'll inject time into sceneHeader manually below
+        }
+    }
+
     // Build pending intro instructions for manually added NPCs
     const pendingIntros = npcList.filter(item => item.npc.pendingIntro);
     let introBlock = '';
@@ -1497,7 +1587,7 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext, sceneInfo)
 
     // Build scene context header from parsed info-block
     let sceneHeader = '';
-    if (sceneInfo) {
+    if (sceneInfo && _bsMode === 'infoblock') {
         const inSceneNames = sceneInfo.characters.length
             ? sceneInfo.characters.join(', ')
             : 'unknown';
@@ -1511,6 +1601,17 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext, sceneInfo)
             + 'These characters are actively participating in the scene right now and must receive "No offscreen events. Currently in scene." with their current location.\n'
             + (timeOfDay ? 'NOTE: It is currently ' + timeOfDay + '. Generated events must be plausible for this time of day.\n' : '')
             + '===\n\n';
+    } else if (_bsMode === 'text') {
+        const it = getInternalTime();
+        if (it) {
+            const th = parseInt(it.time);
+            const tod = th < 6 ? 'night' : th < 12 ? 'morning' : th < 18 ? 'afternoon' : th < 22 ? 'evening' : 'night';
+            sceneHeader = '=== SCENE TIME INFO ===\n'
+                + 'Current date: ' + it.date + ' | Time: ' + it.time + ' (' + tod + ')\n'
+                + 'NOTE: It is currently ' + tod + '. Generated events must be plausible for this time of day.\n'
+                + 'Characters in scene are determined by recent story context — NPCs mentioned in the last messages are considered present.\n'
+                + '===\n\n';
+        }
     }
 
     const userContent = (mainCharInfo ? mainCharInfo + '\n\n' : '')
@@ -1659,13 +1760,15 @@ async function generateEventsForAllNPCs(npcs) {
     const sceneCharsForFilter = (sceneInfo && Array.isArray(sceneInfo.characters)) ? sceneInfo.characters : [];
 
     // Skip in-scene NPCs entirely — no need to send them to API
+    const _sm = getSettings();
     const isInSceneCheck = (npc) => {
+        if (_sm.sceneMode === 'text') {
+            return npcInRecentMessages(npc, _sm.textModeDepth || 2);
+        }
         const sceneText = sceneCharsForFilter.join(', ');
         const nl = npc.name.toLowerCase();
         const sk = Array.isArray(npc.searchKeys) ? npc.searchKeys : [];
-        // Direct name
         if (sceneCharsForFilter.some(c => { const cl = (c || '').toLowerCase().trim(); return cl === nl || cl.includes(nl); })) return true;
-        // Keys (plain + regex)
         return sk.some(k => {
             if (!k || typeof k !== 'string') return false;
             const rx = parseKeyAsRegex(k);
@@ -1834,22 +1937,31 @@ function buildInjectionText(npcs, injectMax) {
     const activeIntros = s2.activeIntros || {};
     const npcsAll = Object.values(npcs);
 
-    // Strong one-shot intro (button was pressed)
-    const activeIntroNames = npcsAll.filter(n => n.pendingIntro && activeIntros[n.name]).map(n => n.name);
-    // Passive background intro (just exists, waiting)
+    // forceIntro: any NPC (new or existing) with activeIntros flag
+    const forceIntroNPCs = npcsAll.filter(n => activeIntros[n.name]);
+    // pendingIntro passive: new NPCs waiting for natural introduction
     const passiveIntroNames = npcsAll.filter(n => n.pendingIntro && !activeIntros[n.name]).map(n => n.name);
 
     let introNote = '';
-    if (activeIntroNames.length) {
-        const names = activeIntroNames.join(', ');
+    if (forceIntroNPCs.length) {
         introNote += '\n\n[!!! MANDATORY — DO NOT SKIP !!!]\n'
-            + 'You MUST introduce the following character(s) into THIS response, right now: ' + names + '.\n'
+            + 'You MUST introduce the following character(s) into THIS response, right now: '
+            + forceIntroNPCs.map(n => n.name).join(', ') + '.\n'
             + 'This is not a suggestion. This character MUST physically appear or be directly referenced in the scene you are about to write.\n'
             + 'Requirements:\n'
             + '- They must enter, arrive, be encountered, or make their presence known within this very message\n'
             + '- The introduction must feel natural and consistent with the current location, time of day, and tone of the scene\n'
-            + '- Do NOT delay it to the next message. Do NOT hint at their arrival. Make it happen NOW.\n'
-            + '[!!! END MANDATORY !!!]';
+            + '- Do NOT delay it to the next message. Do NOT hint at their arrival. Make it happen NOW.\n';
+
+        // Include lorebook description for each forced character so the main model knows who they are
+        // (lorebook entries may be keyword-triggered and might not be in context)
+        for (const npc of forceIntroNPCs) {
+            const desc = (npc.lorebookDescription || npc.description || '').trim();
+            if (desc) {
+                introNote += '\nCHARACTER INFO — ' + npc.name + ':\n' + desc + '\n';
+            }
+        }
+        introNote += '[!!! END MANDATORY !!!]';
     }
     if (passiveIntroNames.length) {
         introNote += '\n[PENDING: ' + passiveIntroNames.join(', ') + ' — exists in this world, introduce naturally when the moment fits.]';
@@ -1946,13 +2058,14 @@ function renderNPCList() {
     for (const key of keys) {
         const npc = npcs[key];
         const count = npc.events.length;
+        const activeIntrosNow = getSettings().activeIntros || {};
         const card = $(`
         <div class="wo_npc_card ${npc.enabled ? '' : 'wo_npc_disabled'}" data-name="${key}">
             <div class="wo_npc_header">
                 <span class="wo_npc_name">${npc.name}${npc.pendingIntro ? ' <span class="wo_intro_badge">NEW</span>' : ''}</span>
                 <span class="wo_npc_count">${npc.lastLocation ? '<i class="fa-solid fa-location-dot" style="font-size:0.8em;margin-right:3px;"></i>' : ''}${count} event${count !== 1 ? 's' : ''}</span>
                 <div class="wo_npc_actions">
-                    ${npc.pendingIntro ? '<button class="wo_btn_introduce menu_button wo_btn_introduce_pulse" title="Introduce into scene"><i class="fa-solid fa-door-open"></i></button>' : ''}
+                    <button class="wo_btn_introduce menu_button ${(npc.pendingIntro || activeIntrosNow[key]) ? 'wo_btn_introduce_pulse' : ''}" title="${activeIntrosNow[key] ? 'Cancel introduction (cued)' : 'Cue introduction into next scene'}"><i class="fa-solid fa-door-open"></i></button>
                     <button class="wo_btn_toggle menu_button">${npc.enabled ? '<i class="fa-solid fa-pause"></i>' : '<i class="fa-solid fa-play"></i>'}</button>
                     <button class="wo_btn_clear menu_button" title="Clear events"><i class="fa-solid fa-trash-can"></i></button>
                     <button class="wo_btn_delete menu_button" title="Remove NPC"><i class="fa-solid fa-xmark"></i></button>
@@ -2115,16 +2228,21 @@ function renderNPCList() {
         card.find('.wo_btn_introduce').on('click', async (e) => {
             e.stopPropagation();
             const s = getSettings();
-            const botKey = getBotKey();
-            if (!s.npcData?.[botKey]?.__npcs?.[key]) return;
-            const npcData = s.npcData[botKey].__npcs[key];
-            // One-shot: inject a strong intro instruction into the next generation
-            // Store it so buildInjectionText can pick it up
             if (!s.activeIntros) s.activeIntros = {};
-            s.activeIntros[key] = true;
-            saveSettingsDebounced();
-            toastr.info(`Introduction cued for ${key}. It will happen at the next fitting moment.`);
-            renderNPCList();
+            if (s.activeIntros[key]) {
+                // Already cued — cancel it
+                delete s.activeIntros[key];
+                saveSettingsDebounced();
+                updateInjection();
+                renderNPCList();
+                toastr.info(`Introduction cancelled for ${key}.`);
+            } else {
+                s.activeIntros[key] = true;
+                saveSettingsDebounced();
+                updateInjection();
+                renderNPCList();
+                toastr.info(`Introduction cued for ${key}. Character info will be sent to the model.`);
+            }
         });
 
         card.find('.wo_btn_toggle').on('click', async () => {
@@ -2186,8 +2304,24 @@ function buildUI() {
                     <i class="fa-solid fa-chevron-down wo_acc_icon"></i>
                 </div>
                 <div class="wo_accordion_body" id="wo_sec_chars">
-                    <div class="wo_section_label" style="margin-top:6px;">Current Story Date</div>
+                    <div class="wo_section_label" style="margin-top:6px;">Scene Detection Mode</div>
+                    <div class="wo_lang_row" id="wo_scene_mode_row">
+                        <button class="wo_scene_mode_btn menu_button" data-mode="infoblock">Info Block</button>
+                        <button class="wo_scene_mode_btn menu_button" data-mode="text">Text Scan</button>
+                    </div>
+
+                    <div class="wo_section_label">Current Story Date &amp; Time</div>
                     <div id="wo_date_display"></div>
+
+                    <!-- Text mode time controls -->
+                    <div id="wo_time_controls" style="display:none;">
+                        <div style="display:flex;gap:6px;margin-top:4px;align-items:center;">
+                            <input type="text" id="wo_time_date" class="text_pole" placeholder="YYYY/MM/DD" style="flex:1;" />
+                            <input type="text" id="wo_time_hhmm" class="text_pole" placeholder="HH:MM" style="width:70px;flex-shrink:0;" />
+                            <button id="wo_time_set" class="menu_button" style="flex-shrink:0;" title="Set time"><i class="fa-solid fa-check"></i></button>
+                        </div>
+                        <div style="font-size:0.78em;opacity:0.5;margin-top:3px;">Auto +<input type="number" id="wo_minutes_per_exchange" class="text_pole" style="width:44px;display:inline;padding:1px 4px;font-size:1em;" /> min per exchange</div>
+                    </div>
 
                     <div id="wo_npc_list" class="wo_npc_list"></div>
 
@@ -2317,6 +2451,16 @@ jQuery(async () => {
 
     function updateDateDisplay() {
         try {
+            const s = getSettings();
+            if (s.sceneMode === 'text') {
+                const it = getInternalTime();
+                if (it) {
+                    $('#wo_date_display').text(it.date + ' • ' + it.time);
+                } else {
+                    $('#wo_date_display').text('No time set — enter below');
+                }
+                return;
+            }
             const ctx = SillyTavern.getContext();
             const chat = ctx.chat || [];
             const lastMsg = [...chat].reverse().find(m => m.mes && hasDatePattern(m.mes));
@@ -2395,6 +2539,56 @@ jQuery(async () => {
         renderNPCList(); updateInjection();
         toastr.success('All NPCs removed.');
     });
+
+    // Scene mode buttons
+    function updateSceneModeButtons() {
+        const mode = getSettings().sceneMode || 'infoblock';
+        $('.wo_scene_mode_btn').each(function() {
+            $(this).toggleClass('wo_lang_active', $(this).data('mode') === mode);
+        });
+        if (mode === 'text') {
+            $('#wo_time_controls').show();
+            $('#wo_minutes_per_exchange').val(getSettings().minutesPerExchange || 5);
+        } else {
+            $('#wo_time_controls').hide();
+        }
+        updateDateDisplay();
+    }
+    updateSceneModeButtons();
+
+    $('.wo_scene_mode_btn').on('click', function() {
+        const s = getSettings();
+        s.sceneMode = $(this).data('mode');
+        saveSettingsDebounced();
+        updateSceneModeButtons();
+    });
+
+    $('#wo_time_set').on('click', () => {
+        const dateVal = $('#wo_time_date').val().trim();
+        const timeVal = $('#wo_time_hhmm').val().trim();
+        if (!dateVal || !timeVal) { toastr.warning('Enter both date and time.'); return; }
+        if (!/^\d{4}\/\d{2}\/\d{2}$/.test(dateVal)) { toastr.warning('Date must be YYYY/MM/DD'); return; }
+        if (!/^\d{2}:\d{2}$/.test(timeVal)) { toastr.warning('Time must be HH:MM'); return; }
+        saveInternalTime(dateVal, timeVal);
+        updateDateDisplay();
+        toastr.success('Time set to ' + dateVal + ' ' + timeVal);
+    });
+
+    $('#wo_minutes_per_exchange').on('input', function() {
+        const s = getSettings();
+        s.minutesPerExchange = parseInt(this.value) || 5;
+        saveSettingsDebounced();
+    });
+
+    // Pre-fill time inputs from current internal time if set
+    function refreshTimeInputs() {
+        const it = getInternalTime();
+        if (it) {
+            $('#wo_time_date').val(it.date);
+            $('#wo_time_hhmm').val(it.time);
+        }
+    }
+    refreshTimeInputs();
 
     // Language buttons
     function updateLangButtons() {
@@ -2518,9 +2712,13 @@ jQuery(async () => {
     // Shared handler for bot message — called by both CHARACTER_MESSAGE_RENDERED and MESSAGE_RECEIVED
     // Uses lastProcessedMsgId to deduplicate (both events can fire for same message)
     async function onBotMessageDone() {
+        // Advance internal time in text mode (once per bot message = one exchange)
+        if (getSettings().sceneMode === 'text' && getInternalTime()) {
+            advanceInternalTime();
+        }
         updateDateDisplay();
 
-        // Auto-clear pendingIntro if NPC appeared in infoblock
+        // Auto-clear pendingIntro if NPC appeared in infoblock or recent messages
         try {
             const ctx = SillyTavern.getContext();
             const lastMsg = (ctx.chat || []).slice(-1)[0];
@@ -2631,7 +2829,9 @@ jQuery(async () => {
 
             renderNPCList();
             updateInjection();
+            updateSceneModeButtons();
             updateDateDisplay();
+            if (typeof refreshTimeInputs === 'function') refreshTimeInputs();
             $('#wo_book_info').html('Bot: ' + getBotKey());
         }, 200);
     });

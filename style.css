@@ -481,3 +481,36 @@ button.menu_button {
     background: color-mix(in srgb, var(--SmartThemeBodyColor) 12%, transparent);
     outline: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor) 40%, transparent);
 }
+
+/* ── Scene mode buttons (reuse lang btn style) ──────── */
+
+.wo_scene_mode_btn {
+    flex: 1;
+    font-size: 0.85em;
+    font-weight: 600;
+    opacity: 0.5;
+    transition: opacity 0.15s;
+}
+
+.wo_scene_mode_btn.wo_lang_active {
+    opacity: 1;
+    outline: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor) 60%, transparent);
+}
+
+.wo_scene_mode_btn:hover {
+    opacity: 0.8;
+}
+
+/* ── Time controls ──────────────────────────────────── */
+
+#wo_time_controls {
+    margin-bottom: 6px;
+}
+
+#wo_minutes_per_exchange {
+    width: 44px;
+    display: inline;
+    padding: 1px 4px;
+    vertical-align: middle;
+    font-size: 0.9em;
+}
