@@ -886,6 +886,31 @@ function getNPCs() {
     return merged;
 }
 
+async function saveNPCsPartial(npcs) {
+    // Save only the provided NPCs without touching others in storage
+    const s = getSettings();
+    const botKey = getBotKey();
+    const chatKey = getChatKey();
+    if (!s.npcData) s.npcData = {};
+    if (!s.npcData[botKey]) s.npcData[botKey] = { __npcs: {} };
+    if (!s.npcData[botKey].__npcs) s.npcData[botKey].__npcs = {};
+    if (!s.npcData[botKey][chatKey]) s.npcData[botKey][chatKey] = {};
+    for (const [name, npc] of Object.entries(npcs)) {
+        // Only update runtime data (events/facts/location) — don't touch identity
+        s.npcData[botKey][chatKey][name] = {
+            events: npc.events || [],
+            permanentFacts: npc.permanentFacts || [],
+            lastLocation: npc.lastLocation || null,
+        };
+        // Also update identity fields that may have changed
+        if (s.npcData[botKey].__npcs[name]) {
+            s.npcData[botKey].__npcs[name].pendingIntro = npc.pendingIntro ?? false;
+        }
+    }
+    console.log('[WildOffscreen] saveNPCsPartial | keys:', Object.keys(npcs), '| chatKey:', chatKey);
+    saveSettingsDebounced();
+}
+
 async function saveNPCs(npcs) {
     const s = getSettings();
     const botKey = getBotKey();
@@ -1858,8 +1883,16 @@ async function generateEventsForAllNPCs(npcs) {
         console.log('[WildOffscreen] Event for', npc.name, '@', result.location, ':', result.text);
     }
 
-    // Save all mutations back to storage
-    await saveNPCs(npcs);
+    // Save only the NPCs that were modified (offscreen ones)
+    // Do NOT save in-scene NPCs — their data in `npcs` is stale snapshot
+    // and would overwrite any data saved between snapshot and now
+    const modifiedNpcs = {};
+    for (const { npc, key } of npcList) {
+        modifiedNpcs[key] = npc;
+    }
+    if (Object.keys(modifiedNpcs).length > 0) {
+        await saveNPCsPartial(modifiedNpcs);
+    }
 }
 
 async function runGenerationCycle() {
