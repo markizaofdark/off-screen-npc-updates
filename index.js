@@ -1501,6 +1501,19 @@ function onGenerationStarted() {
 
 // ── UI ─────────────────────────────────────────────────────
 
+function populateEditSelect() {
+    const npcs = getNPCs();
+    const sel = $('#wo_edit_npc_select');
+    if (!sel.length) return;
+    const current = sel.val();
+    sel.empty().append('<option value="">— select NPC —</option>');
+    Object.keys(npcs).forEach(name => {
+        sel.append($('<option>').val(name).text(name));
+    });
+    if (current && npcs[current]) sel.val(current);
+    else { $('#wo_edit_npc_panel').hide(); }
+}
+
 function renderNPCList() {
     const npcs = getNPCs();
     const container = $('#wo_npc_list');
@@ -1994,17 +2007,6 @@ jQuery(async () => {
     });
 
     // Edit NPC panel
-    function populateEditSelect() {
-        const npcs = getNPCs();
-        const sel = $('#wo_edit_npc_select');
-        const current = sel.val();
-        sel.empty().append('<option value="">— select NPC —</option>');
-        Object.keys(npcs).forEach(name => {
-            sel.append($('<option>').val(name).text(name));
-        });
-        if (current && npcs[current]) sel.val(current);
-        else { $('#wo_edit_npc_panel').hide(); }
-    }
     populateEditSelect();
 
     $('#wo_edit_npc_select').on('change', function() {
