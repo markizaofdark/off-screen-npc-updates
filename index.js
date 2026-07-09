@@ -2668,7 +2668,7 @@ jQuery(async () => {
 
     $('#wo_keyword_scan').on('change', function () { s.infoblockKeywordScan = this.checked; saveSettingsDebounced(); });
     $('#wo_keyword_depth').on('input', function () { s.keywordScanDepth = parseInt(this.value) || 2; saveSettingsDebounced(); });
-    $('#wo_trigger_every').on('input', function () { s.triggerEvery = parseInt(this.value) || DEFAULTS.triggerEvery; saveSettingsDebounced(); });
+    $('#wo_trigger_every').on('input', function () { const v = parseInt(this.value); s.triggerEvery = isNaN(v) ? DEFAULTS.triggerEvery : Math.max(0, v); saveSettingsDebounced(); });
     $('#wo_max_events').on('input', function () { s.maxEvents = parseInt(this.value) || DEFAULTS.maxEvents; saveSettingsDebounced(); });
     $('#wo_inject_max').on('input', function () { s.injectMaxMessages = parseInt(this.value) || 0; saveSettingsDebounced(); });
 
@@ -2888,10 +2888,16 @@ jQuery(async () => {
         msgCounter = 0;
         lastChatLength = 0;
         lastBotMessageId = null;
+        // Pre-set to 0 so the initial bot greeting (index 0) doesn't slip through
+        // dedup and increment msgCounter before the user has sent anything.
+        lastProcessedMsgId = 0;
         setTimeout(async () => {
             try {
                 const ctx = SillyTavern.getContext();
                 lastChatLength = (ctx.chat || []).length;
+                // Sync dedup index to current chat length so any pre-existing messages
+                // don't fire onBotMessageDone and skew the counter.
+                lastProcessedMsgId = lastChatLength - 1;
             } catch(e) {}
 
             const newBotKey  = getBotKey();
