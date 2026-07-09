@@ -897,10 +897,11 @@ async function saveNPCsPartial(npcs) {
     if (!s.npcData[botKey][chatKey]) s.npcData[botKey][chatKey] = {};
     for (const [name, npc] of Object.entries(npcs)) {
         // Only update runtime data (events/facts/location) — don't touch identity
-        s.npcData[botKey][chatKey][name] = {
-            events: npc.events || [],
-            permanentFacts: npc.permanentFacts || [],
-            lastLocation: npc.lastLocation || null,
+        const existingData = s.npcData[botKey][chatKey][name] || {};
+            s.npcData[botKey][chatKey][name] = {
+            events: npc.events && npc.events.length > 0 ? npc.events : (existingData.events || []),
+            permanentFacts: npc.permanentFacts && npc.permanentFacts.length > 0 ? npc.permanentFacts : (existingData.permanentFacts || []),
+            lastLocation: npc.lastLocation !== undefined ? npc.lastLocation : (existingData.lastLocation || null),
         };
         // Also update identity fields that may have changed
         if (s.npcData[botKey].__npcs[name]) {
@@ -936,11 +937,12 @@ async function saveNPCs(npcs) {
             pendingIntro: npc.pendingIntro ?? false,
         };
         // Save runtime (events/facts/location) per chat
+        const existingData = s.npcData[botKey][chatKey][name] || {};
         s.npcData[botKey][chatKey][name] = {
-            events: npc.events || [],
-            permanentFacts: npc.permanentFacts || [],
-            lastLocation: npc.lastLocation || null,
-        };
+        events: npc.events && npc.events.length > 0 ? npc.events : (existingData.events || []),
+        permanentFacts: npc.permanentFacts && npc.permanentFacts.length > 0 ? npc.permanentFacts : (existingData.permanentFacts || []),
+        lastLocation: npc.lastLocation !== undefined ? npc.lastLocation : (existingData.lastLocation || null),
+    };
     }
     saveSettingsDebounced();
 }
