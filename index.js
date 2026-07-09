@@ -2762,7 +2762,8 @@ jQuery(async () => {
 
     
     // Shared handler for bot message — called by both CHARACTER_MESSAGE_RENDERED and MESSAGE_RECEIVED
-    // Uses lastProcessedMsgId to deduplicate (both events can fire for same message)
+    // Uses message index for deduplication — stable from the moment the message enters the array,
+    // unlike send_date+length which can differ between the two events if streaming is involved.
     async function onBotMessageDone() {
         // Advance internal time in text mode (once per bot message = one exchange)
         if (getSettings().sceneMode === 'text' && getInternalTime()) {
@@ -2773,12 +2774,14 @@ jQuery(async () => {
         // Auto-clear pendingIntro if NPC appeared in infoblock or recent messages
         try {
             const ctx = SillyTavern.getContext();
-            const lastMsg = (ctx.chat || []).slice(-1)[0];
+            const chat = ctx.chat || [];
+            const lastMsg = chat.slice(-1)[0];
 
-            // Deduplicate: skip if already processed this message
-            const msgId = lastMsg?.send_date + '_' + (lastMsg?.mes?.length || 0);
-            if (msgId === lastProcessedMsgId) return;
-            lastProcessedMsgId = msgId;
+            // Deduplicate by message index — stable across both events, unlike send_date+length
+            // which can differ if MESSAGE_RECEIVED fires before the mes is fully populated.
+            const msgIdx = chat.length - 1;
+            if (msgIdx === lastProcessedMsgId) return;
+            lastProcessedMsgId = msgIdx;
 
             if (lastMsg?.mes) {
                 const s = getSettings();
@@ -2809,17 +2812,27 @@ jQuery(async () => {
             const ctx = SillyTavern.getContext();
             const currentLength = (ctx.chat || []).length;
 
-            // Reroll = same length AND last bot message content changed
+            // Reroll = same chat length AND last bot message content changed vs previous call.
+            // IMPORTANT: snapshot lastChatLength and lastBotMessageId BEFORE computing isReroll,
+            // then update them immediately. This way if two events somehow slip through dedup
+            // (shouldn't happen with index-based dedup, but just in case), the second call
+            // will see the already-updated values and not produce a false positive.
+            const prevChatLength = lastChatLength;
+            const prevBotMessageId = lastBotMessageId;
+
             const lastMsg = (ctx.chat || []).slice(-1)[0];
             const lastMsgIsBot = lastMsg && !lastMsg.is_user && !lastMsg.is_system;
             const currentMsgId = lastMsgIsBot ? (lastMsg.mes || '').slice(0, 80) : null;
 
-            const lengthUnchanged = currentLength === lastChatLength && currentLength > 0;
-            const contentChanged = currentMsgId !== null && currentMsgId !== lastBotMessageId;
-            const isReroll = lengthUnchanged && contentChanged && lastBotMessageId !== null;
-
+            // Update state immediately so any re-entrant call sees current values
             lastChatLength = currentLength;
             if (currentMsgId) lastBotMessageId = currentMsgId;
+
+            const lengthUnchanged = currentLength === prevChatLength && currentLength > 0;
+            const contentChanged = currentMsgId !== null && currentMsgId !== prevBotMessageId;
+            // prevBotMessageId must be non-null: means we've seen at least one message before,
+            // so this isn't the very first message in the session being flagged as a reroll.
+            const isReroll = lengthUnchanged && contentChanged && prevBotMessageId !== null;
 
             if (isReroll) {
                 console.log('[WildOffscreen] Reroll confirmed — content changed, removing last events');
@@ -2844,7 +2857,7 @@ jQuery(async () => {
                     updateInjection();
                 }
                 msgCounter = s.triggerEvery;
-            } else if (lengthUnchanged && !contentChanged && lastBotMessageId !== null) {
+            } else if (lengthUnchanged && !contentChanged && prevBotMessageId !== null) {
                 console.log('[WildOffscreen] Same message seen again — skipping');
                 return;
             }
@@ -2860,7 +2873,7 @@ jQuery(async () => {
         }
     }
 
-    // Two events for redundancy — whichever fires first processes, second is deduped
+    // Two events for redundancy — whichever fires first processes, second is deduped by message index
     eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, onBotMessageDone);
     eventSource.on(event_types.MESSAGE_RECEIVED, onBotMessageDone);
 
