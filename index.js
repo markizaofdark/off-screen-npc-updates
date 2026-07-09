@@ -2898,6 +2898,15 @@ jQuery(async () => {
         // Pre-set to a fingerprint matching index 0 so the initial bot greeting
         // doesn't slip through dedup and increment msgCounter before user sends anything.
         lastProcessedMsgId = '0|';
+
+        // Snapshot prev keys synchronously — if CHAT_CHANGED fires twice in quick succession,
+        // the second call would see stale _lastChatKey from a setTimeout not yet run,
+        // mis-detect chatChanged and potentially clear data it shouldn't.
+        const prevBotKey  = _lastBotKey;
+        const prevChatKey = _lastChatKey;
+        _lastBotKey  = getBotKey();
+        _lastChatKey = getChatKey();
+
         setTimeout(async () => {
             try {
                 const ctx = SillyTavern.getContext();
@@ -2910,7 +2919,9 @@ jQuery(async () => {
 
             const newBotKey  = getBotKey();
             const newChatKey = getChatKey();
-            const chatChanged = newChatKey !== _lastChatKey || newBotKey !== _lastBotKey;
+            const chatChanged = newChatKey !== prevChatKey || newBotKey !== prevBotKey;
+            // DEBUG
+            toastr.info('[WO debug] prevChat=' + prevChatKey.slice(-8) + ' newChat=' + newChatKey.slice(-8) + ' changed=' + chatChanged);
 
             if (chatChanged) {
                 const s = getSettings();
@@ -2921,11 +2932,12 @@ jQuery(async () => {
                 if (!hasExistingData) {
                     await clearChatData();
                     toastr.info('New chat — NPC events cleared. Characters retained.');
+                } else {
+                    // DEBUG — remove after diagnosing restore issue
+                    const eventCount = Object.values(chatStore).reduce((n, v) => n + (v?.events?.length || 0), 0);
+                    toastr.info('[WO debug] Returning to existing chat. Events found: ' + eventCount);
                 }
             }
-
-            _lastBotKey  = newBotKey;
-            _lastChatKey = newChatKey;
 
             renderNPCList();
             updateInjection();
