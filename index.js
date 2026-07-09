@@ -764,6 +764,7 @@ const CATEGORIES = Object.keys(EVENT_POOLS.minor);
 
 let msgCounter = 0;
 let lastChatLength = 0;  // tracks chat size to detect rerolls
+let lastBotMessageId = null; // tracks last bot message to detect rerolls accurately
 let isGenerating = false; // guard against re-entrant generation
 let lastProcessedMsgId = null; // deduplicate MESSAGE_RECEIVED + CHARACTER_MESSAGE_RENDERED
 
@@ -2237,6 +2238,13 @@ function renderNPCList() {
                 toastr.info(`Introduction cancelled for ${key}.`);
             } else {
                 s.activeIntros[key] = true;
+                // Update lastChatLength so next message doesn't trigger false reroll
+                try {
+                    const ctx = SillyTavern.getContext();
+                    lastChatLength = (ctx.chat || []).length;
+                    const lm = (ctx.chat || []).slice(-1)[0];
+                    if (lm && !lm.is_user) lastBotMessageId = (lm.mes || '').slice(0, 80);
+                } catch(e) {}
                 saveSettingsDebounced();
                 updateInjection();
                 renderNPCList();
@@ -2764,11 +2772,21 @@ jQuery(async () => {
         try {
             const ctx = SillyTavern.getContext();
             const currentLength = (ctx.chat || []).length;
-            const isReroll = currentLength === lastChatLength && currentLength > 0;
+
+            // Reroll = same length AND last bot message content changed
+            const lastMsg = (ctx.chat || []).slice(-1)[0];
+            const lastMsgIsBot = lastMsg && !lastMsg.is_user && !lastMsg.is_system;
+            const currentMsgId = lastMsgIsBot ? (lastMsg.mes || '').slice(0, 80) : null;
+
+            const lengthUnchanged = currentLength === lastChatLength && currentLength > 0;
+            const contentChanged = currentMsgId !== null && currentMsgId !== lastBotMessageId;
+            const isReroll = lengthUnchanged && contentChanged && lastBotMessageId !== null;
+
             lastChatLength = currentLength;
+            if (currentMsgId) lastBotMessageId = currentMsgId;
 
             if (isReroll) {
-                console.log('[WildOffscreen] Reroll detected — removing last events');
+                console.log('[WildOffscreen] Reroll confirmed — content changed, removing last events');
                 const npcs = getNPCs();
                 let removed = 0;
                 for (const key of Object.keys(npcs)) {
@@ -2783,6 +2801,9 @@ jQuery(async () => {
                     updateInjection();
                 }
                 msgCounter = s.triggerEvery;
+            } else if (lengthUnchanged && !contentChanged && lastBotMessageId !== null) {
+                console.log('[WildOffscreen] Same message seen again — skipping');
+                return;
             }
         } catch(e) {
             console.warn('[WildOffscreen] onBotMessageDone error:', e.message);
@@ -2810,6 +2831,7 @@ jQuery(async () => {
     eventSource.on(event_types.CHAT_CHANGED, () => {
         msgCounter = 0;
         lastChatLength = 0;
+        lastBotMessageId = null;
         setTimeout(async () => {
             try {
                 const ctx = SillyTavern.getContext();
