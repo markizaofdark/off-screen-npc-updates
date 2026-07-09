@@ -962,14 +962,43 @@ function parseInfoblockChars(mes) {
  * Check if an NPC appears in a message's infoblock character list.
  * Exact match or infoblock name contains NPC name (handles full name vs surname).
  */
+// Parse a lorebook key that may be a /regex/flags string
+function parseKeyAsRegex(key) {
+    const m = key.match(/^\/(.+)\/([gimsuy]*)$/);
+    if (!m) return null;
+    try { return new RegExp(m[1], m[2] || 'i'); } catch(e) { return null; }
+}
+
 function npcInInfoblock(npc, mes) {
     const chars = parseInfoblockChars(mes);
     if (!chars.length) return false;
-    const npcLower = npc.name.toLowerCase();
-    return chars.some(c => {
+
+    // Join all character names into a single string for regex testing
+    const charsText = chars.join(', ');
+    const npcLower  = npc.name.toLowerCase();
+
+    // 1. Direct name match against each character entry
+    const directMatch = chars.some(c => {
         const cl = c.toLowerCase().trim();
         return cl === npcLower || cl.includes(npcLower);
     });
+    if (directMatch) return true;
+
+    // 2. Search keys — plain strings and /regex/ patterns
+    const keys = Array.isArray(npc.searchKeys) ? npc.searchKeys : [];
+    for (const key of keys) {
+        if (!key || typeof key !== 'string') continue;
+        const rx = parseKeyAsRegex(key);
+        if (rx) {
+            // Regex key: test against the full chars text
+            if (rx.test(charsText)) return true;
+        } else {
+            // Plain string key: case-insensitive substring match
+            if (key.length >= 2 && charsText.toLowerCase().includes(key.toLowerCase())) return true;
+        }
+    }
+
+    return false;
 }
 
 // ── Chat context ───────────────────────────────────────────
@@ -1053,20 +1082,21 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext, sceneInfo)
         if (sceneChars.length > 0) {
             const npcNameLower = npc.name.toLowerCase();
             const searchKeys = Array.isArray(npc.searchKeys) ? npc.searchKeys : [];
-            inScene = sceneChars.some(c => {
+            const sceneText = sceneChars.join(', ');
+            // Direct name match
+            const directSceneMatch = sceneChars.some(c => {
                 if (!c || typeof c !== 'string') return false;
                 const cl = c.toLowerCase().trim();
-                // Exact match OR scene char name contains NPC name as whole word (handles "Савелий Парфёнов" vs "Парфёнов")
-                // Deliberately NOT using npcNameLower.includes(cl) — too greedy, causes false positives
-                const exactOrContains = cl === npcNameLower || cl.includes(npcNameLower);
-                // Also check search keys (lorebook keys) for alternative name forms
-                const keyMatch = searchKeys.some(k => {
-                    if (!k || typeof k !== 'string' || k.length < 3) return false;
-                    const kl = k.toLowerCase().trim();
-                    return cl === kl || cl.includes(kl);
-                });
-                return exactOrContains || keyMatch;
+                return cl === npcNameLower || cl.includes(npcNameLower);
             });
+            // Key match (plain + regex)
+            const keySceneMatch = !directSceneMatch && searchKeys.some(k => {
+                if (!k || typeof k !== 'string') return false;
+                const rx = parseKeyAsRegex(k);
+                if (rx) return rx.test(sceneText);
+                return k.length >= 2 && sceneText.toLowerCase().includes(k.toLowerCase());
+            });
+            inScene = directSceneMatch || keySceneMatch;
         }
 
         const facts = Array.isArray(npc.permanentFacts) ? npc.permanentFacts : [];
@@ -1269,13 +1299,20 @@ async function generateEventsForAllNPCs(npcs) {
     const sceneCharsForFilter = (sceneInfo && Array.isArray(sceneInfo.characters)) ? sceneInfo.characters : [];
 
     // Skip in-scene NPCs entirely — no need to send them to API
-    const isInSceneCheck = (npc) => sceneCharsForFilter.some(c => {
-        if (!c || typeof c !== 'string') return false;
-        const cl = c.toLowerCase().trim();
+    const isInSceneCheck = (npc) => {
+        const sceneText = sceneCharsForFilter.join(', ');
         const nl = npc.name.toLowerCase();
         const sk = Array.isArray(npc.searchKeys) ? npc.searchKeys : [];
-        return cl === nl || cl.includes(nl) || sk.some(k => k && typeof k === 'string' && cl.includes(k.toLowerCase()));
-    });
+        // Direct name
+        if (sceneCharsForFilter.some(c => { const cl = (c || '').toLowerCase().trim(); return cl === nl || cl.includes(nl); })) return true;
+        // Keys (plain + regex)
+        return sk.some(k => {
+            if (!k || typeof k !== 'string') return false;
+            const rx = parseKeyAsRegex(k);
+            if (rx) return rx.test(sceneText);
+            return k.length >= 2 && sceneText.toLowerCase().includes(k.toLowerCase());
+        });
+    };
 
     const offscreenKeys = keys.filter(k => !isInSceneCheck(npcs[k]));
     const skippedInScene = keys.filter(k => isInSceneCheck(npcs[k]));
