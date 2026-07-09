@@ -33,6 +33,7 @@ const DEFAULTS = {
     connectionProfile: '',
     maxTokens: 200,
     outputLanguage: 'en',
+    debugMode: false,        // show debug toastr notifications
     scanPosition: 'before_char',
     sceneMode: 'infoblock',   // 'infoblock' | 'text'
     infoblockKeywordScan: false, // infoblock mode: also scan recent messages by keywords
@@ -776,6 +777,11 @@ function getSettings() {
         if (extension_settings[EXT][k] === undefined) extension_settings[EXT][k] = v;
     }
     return extension_settings[EXT];
+}
+
+// ── Debug helper ──────────────────────────────────────────
+function debugToast(msg) {
+    if (getSettings().debugMode) toastr.info('[WO] ' + msg);
 }
 
 // ── NPC storage (per-bot) ──────────────────────────────────
@@ -2461,6 +2467,8 @@ function buildUI() {
                         <select id="wo_profile_select" class="text_pole" style="flex:1;"></select>
                         <button id="wo_profile_refresh" class="menu_button" title="Refresh profiles" style="flex-shrink:0;"><i class="fa-solid fa-rotate"></i></button>
                     </div>
+                    <div class="wo_section_label" style="margin-top:10px;">Debug</div>
+                    <button id="wo_debug_toggle" class="menu_button" style="width:100%;opacity:0.7;"><i class="fa-solid fa-bug"></i> Debug notifications: <span id="wo_debug_label">OFF</span></button>
                 </div>
             </div>
 
@@ -2662,6 +2670,20 @@ jQuery(async () => {
     $('#wo_toggle').on('change', function () { s.enabled = this.checked; saveSettingsDebounced(); updateInjection(); });
     $('#wo_profile_select').on('change', function () { s.connectionProfile = this.value; saveSettingsDebounced(); });
     $('#wo_profile_refresh').on('click', () => { refreshProfileSelect(); toastr.info('Connection profiles refreshed.'); });
+
+    // Debug toggle
+    function updateDebugLabel() {
+        const on = getSettings().debugMode;
+        $('#wo_debug_label').text(on ? 'ON' : 'OFF');
+        $('#wo_debug_toggle').css('opacity', on ? '1' : '0.7');
+    }
+    updateDebugLabel();
+    $('#wo_debug_toggle').on('click', () => {
+        s.debugMode = !s.debugMode;
+        saveSettingsDebounced();
+        updateDebugLabel();
+        toastr.info('Debug notifications ' + (s.debugMode ? 'enabled' : 'disabled'));
+    });
     
     $('#wo_max_messages').on('input', function() { s.maxMessages = parseInt(this.value) || 30; saveSettingsDebounced(); });
     $('#wo_max_chars').on('input', function() { s.maxCharsPerMsg = parseInt(this.value) || 2000; saveSettingsDebounced(); });
@@ -2843,6 +2865,7 @@ jQuery(async () => {
 
             if (isReroll) {
                 console.log('[WildOffscreen] Reroll confirmed — content changed, removing last events');
+                debugToast('Reroll detected — removing last events');
                 const npcs = getNPCs();
                 let removed = 0;
                 for (const key of Object.keys(npcs)) {
@@ -2874,6 +2897,7 @@ jQuery(async () => {
 
         msgCounter++;
         console.log('[WildOffscreen] msgCounter:', msgCounter, '/', s.triggerEvery);
+        debugToast('msgCounter: ' + msgCounter + ' / ' + s.triggerEvery);
         if (msgCounter >= s.triggerEvery) {
             msgCounter = 0;
             runGenerationCycle();
@@ -2920,8 +2944,6 @@ jQuery(async () => {
             const newBotKey  = getBotKey();
             const newChatKey = getChatKey();
             const chatChanged = newChatKey !== prevChatKey || newBotKey !== prevBotKey;
-            // DEBUG
-            toastr.info('[WO debug] prevChat=' + prevChatKey.slice(-8) + ' newChat=' + newChatKey.slice(-8) + ' changed=' + chatChanged);
 
             if (chatChanged) {
                 const s = getSettings();
@@ -2931,11 +2953,10 @@ jQuery(async () => {
 
                 if (!hasExistingData) {
                     await clearChatData();
-                    toastr.info('New chat — NPC events cleared. Characters retained.');
+                    debugToast('New chat — events cleared. Characters retained.');
                 } else {
-                    // DEBUG — remove after diagnosing restore issue
                     const eventCount = Object.values(chatStore).reduce((n, v) => n + (v?.events?.length || 0), 0);
-                    toastr.info('[WO debug] Returning to existing chat. Events found: ' + eventCount);
+                    debugToast('Returning to existing chat. Events found: ' + eventCount);
                 }
             }
 
