@@ -791,14 +791,13 @@ function getBotKey() {
 function getChatKey() {
     try {
         const ctx = SillyTavern.getContext();
-        // Try stable identifiers first
         const chatId = (typeof ctx.getCurrentChatId === 'function' ? ctx.getCurrentChatId() : null)
             || ctx.chatId
             || ctx.selected_group;
-        if (chatId) return String(chatId);
-        // Fallback: first message send_date is stable for the lifetime of a chat
+        if (chatId) { console.log('[WildOffscreen] getChatKey →', String(chatId)); return String(chatId); }
         const firstMsg = ctx.chat?.[0];
-        if (firstMsg?.send_date) return 'chat_' + String(firstMsg.send_date);
+        if (firstMsg?.send_date) { const k = 'chat_' + String(firstMsg.send_date); console.log('[WildOffscreen] getChatKey fallback →', k); return k; }
+        console.log('[WildOffscreen] getChatKey → default');
         return 'default';
     } catch(e) { return 'default'; }
 }
@@ -891,6 +890,8 @@ async function saveNPCs(npcs) {
     const s = getSettings();
     const botKey = getBotKey();
     const chatKey = getChatKey();
+    const eventCounts = Object.fromEntries(Object.entries(npcs).map(([k,v]) => [k, v.events?.length || 0]));
+    console.log('[WildOffscreen] saveNPCs | chatKey:', chatKey, '| eventCounts:', eventCounts, '| caller:', new Error().stack.split('\n')[2]?.trim());
     if (!s.npcData) s.npcData = {};
     if (!s.npcData[botKey]) s.npcData[botKey] = { __npcs: {} };
     if (!s.npcData[botKey].__npcs) s.npcData[botKey].__npcs = {};
