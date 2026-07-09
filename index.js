@@ -27,7 +27,7 @@ const DEFAULTS = {
     maxMessages: 30,
     maxCharsPerMsg: 2000,
     enabled: true,
-    triggerEvery: 5,
+    triggerEvery: 1,
     maxEvents: 7,
     injectMaxMessages: 0,
     connectionProfile: '',
@@ -2405,8 +2405,8 @@ function buildUI() {
                     <label><small>Max characters per message</small></label>
                     <input type="number" id="wo_max_chars" class="text_pole" value="${s.maxCharsPerMsg || 2000}" />
                     <div class="wo_section_label">Generation</div>
-                    <label><small>Generate events every N messages (counts both bot and user messages)</small></label>
-                    <input type="number" id="wo_trigger_every" class="text_pole" value="${s.triggerEvery}" />
+                    <label><small>Generate events every N bot replies (1 = every reply, 2 = every other reply, etc.)</small></label>
+                    <input type="number" id="wo_trigger_every" class="text_pole" value="${s.triggerEvery}" min="1" />
                     <label><small>Max stored events per NPC</small></label>
                     <input type="number" id="wo_max_events" class="text_pole" value="${s.maxEvents}" />
                 </div>
@@ -2777,11 +2777,18 @@ jQuery(async () => {
             const chat = ctx.chat || [];
             const lastMsg = chat.slice(-1)[0];
 
-            // Deduplicate by message index — stable across both events, unlike send_date+length
-            // which can differ if MESSAGE_RECEIVED fires before the mes is fully populated.
+            // Deduplicate by index + content fingerprint.
+            // Index alone blocks rerols (same slot, different content).
+            // send_date+length was unreliable when MESSAGE_RECEIVED fired mid-stream.
+            // We take chars from the END of mes (infoblock header is identical across
+            // all messages, so slicing from the start would produce the same fingerprint
+            // for every message and break dedup entirely).
+            const lastMsgForDedup = chat[chat.length - 1];
             const msgIdx = chat.length - 1;
-            if (msgIdx === lastProcessedMsgId) return;
-            lastProcessedMsgId = msgIdx;
+            const mesText = lastMsgForDedup?.mes || '';
+            const msgFingerprint = msgIdx + '|' + mesText.slice(-60);
+            if (msgFingerprint === lastProcessedMsgId) return;
+            lastProcessedMsgId = msgFingerprint;
 
             if (lastMsg?.mes) {
                 const s = getSettings();
@@ -2888,16 +2895,17 @@ jQuery(async () => {
         msgCounter = 0;
         lastChatLength = 0;
         lastBotMessageId = null;
-        // Pre-set to 0 so the initial bot greeting (index 0) doesn't slip through
-        // dedup and increment msgCounter before the user has sent anything.
-        lastProcessedMsgId = 0;
+        // Pre-set to a fingerprint matching index 0 so the initial bot greeting
+        // doesn't slip through dedup and increment msgCounter before user sends anything.
+        lastProcessedMsgId = '0|';
         setTimeout(async () => {
             try {
                 const ctx = SillyTavern.getContext();
                 lastChatLength = (ctx.chat || []).length;
-                // Sync dedup index to current chat length so any pre-existing messages
-                // don't fire onBotMessageDone and skew the counter.
-                lastProcessedMsgId = lastChatLength - 1;
+                // Sync dedup fingerprint to the last existing message so no pre-existing
+                // messages fire onBotMessageDone and skew the counter.
+                const lastExisting = (ctx.chat || []).slice(-1)[0];
+                lastProcessedMsgId = (lastChatLength - 1) + '|' + (lastExisting?.mes || '').slice(-60);
             } catch(e) {}
 
             const newBotKey  = getBotKey();
