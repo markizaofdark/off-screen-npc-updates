@@ -1520,6 +1520,7 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext, sceneInfo)
         if (s2.sceneMode === 'text') {
             // Text mode: check if NPC appears in recent bot messages
             inScene = npcInRecentMessages(npc, s2.textModeDepth || 2);
+            console.log('[WildOffscreen] TEXT MODE — NPC', npc.name, '→', inScene ? 'IN SCENE' : 'OFFSCREEN');
         } else if (sceneChars.length > 0) {
             const npcNameLower = npc.name.toLowerCase();
             const sceneText = sceneChars.join(', ');
@@ -1537,6 +1538,9 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext, sceneInfo)
                 return k.length >= 2 && sceneText.toLowerCase().includes(k.toLowerCase());
             });
             inScene = directSceneMatch || keySceneMatch;
+            console.log('[WildOffscreen] INFOBLOCK MODE — NPC', npc.name, '→', inScene ? 'IN SCENE' : 'OFFSCREEN', '| sceneChars:', sceneChars);
+        } else {
+            console.log('[WildOffscreen] INFOBLOCK MODE — no sceneChars found, NPC', npc.name, '→ OFFSCREEN (no infoblock parsed)');
         } // end infoblock mode
 
         const facts = Array.isArray(npc.permanentFacts) ? npc.permanentFacts : [];
