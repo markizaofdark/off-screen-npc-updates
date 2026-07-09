@@ -1719,7 +1719,7 @@ function buildUI() {
                 </div>
                 <div class="wo_accordion_body" id="wo_sec_chars">
                     <div class="wo_section_label" style="margin-top:6px;">Current Story Date</div>
-                    <div id="wo_date_display">—</div>
+                    <div id="wo_date_display"></div>
 
                     <div id="wo_npc_list" class="wo_npc_list"></div>
 
@@ -1741,7 +1741,7 @@ function buildUI() {
                     <i class="fa-solid fa-chevron-down wo_acc_icon"></i>
                 </div>
                 <div class="wo_accordion_body" id="wo_sec_lore" style="display:none;">
-                    <div id="wo_book_info" class="wo_book_info" style="margin-top:6px;">—</div>
+                    <div id="wo_book_info" class="wo_book_info" style="margin-top:6px;"></div>
                     <label style="margin-top:4px;"><small>Scan entries at position</small></label>
                     <select id="wo_scan_position" class="text_pole" style="margin-bottom:6px;">
                         <option value="before_char">before_char</option>
@@ -1853,9 +1853,9 @@ jQuery(async () => {
             const chat = ctx.chat || [];
             const lastMsg = [...chat].reverse().find(m => m.mes && hasDatePattern(m.mes));
             const dateStr = lastMsg ? extractDateFromMessage(lastMsg.mes) : null;
-            $('#wo_date_display').text(dateStr || 'No date found in history');
+            $('#wo_date_display').text(dateStr || '');
         } catch(e) {
-            $('#wo_date_display').text('—');
+            $('#wo_date_display').text('');
         }
     }
 
