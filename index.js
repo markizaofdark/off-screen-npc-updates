@@ -34,11 +34,6 @@ const DEFAULTS = {
     maxTokens: 200,
     outputLanguage: 'en',
     scanPosition: 'before_char',
-    sceneMode: 'infoblock',   // 'infoblock' | 'text'
-    infoblockKeywordScan: false, // infoblock mode: also scan recent messages by keywords
-    keywordScanDepth: 2,      // how many bot messages to scan (both modes)
-    textModeDepth: 2,         // kept for compatibility, mirrors keywordScanDepth in text mode
-    minutesPerExchange: 5,    // minutes added per user+bot exchange in text mode
 };
 
 const LANGUAGE_INSTRUCTION = {
@@ -69,18 +64,6 @@ const EVENT_POOLS = {
                 'completed a private routine that gave them quiet satisfaction',
                 'spent time alone in a way that felt restorative rather than isolating',
                 'came across something that reminded them of a better period of their life',
-                'cooked or made something with their hands and felt briefly content',
-                'caught themselves smiling at something they normally would have overlooked',
-                'tidied a small corner of their space and felt the difference immediately',
-                'had a moment of unexpected calm in the middle of a stressful stretch',
-                'stumbled onto something that matched an old private interest they had nearly forgotten',
-                'got through a task they had been dreading and felt lighter afterward',
-                'permitted themselves to do nothing for a while without feeling guilty about it',
-                'noticed their body feeling better than usual and appreciated it without overthinking it',
-                'found something small to look forward to before the day was out',
-                'let themselves sit with a good memory instead of pushing it aside',
-                'resolved a minor internal conflict they had been carrying all week',
-                'finished something small and felt that it was actually enough',
             ],
             negative: [
                 'could not shake a low mood without any clear reason',
@@ -91,18 +74,6 @@ const EVENT_POOLS = {
                 'felt a familiar anxiety return over something minor',
                 'lost something small but meaningful to them',
                 'spent more time alone than they intended and felt the weight of it',
-                'caught themselves in a habit they thought they had broken',
-                'felt the gap between who they are and who they intended to be more sharply than usual',
-                'got through the day but could not say what made it worth getting through',
-                'found that something they usually enjoy left them flat',
-                'snapped at themselves internally in a way they found hard to justify',
-                'ran out of something they depended on at the wrong moment',
-                'ended the day with the sense that they had missed something without knowing what',
-                'felt physically worn down in a way that seemed out of proportion to the day',
-                'kept returning in their mind to something small they should have done differently',
-                'noticed a worry they thought was gone had quietly come back',
-                'let time pass doing nothing and felt worse for it afterward',
-                'could not fully explain why today felt harder than yesterday',
             ],
         },
         Relationship: {
@@ -115,18 +86,6 @@ const EVENT_POOLS = {
                 'ran into someone from their past under pleasant circumstances',
                 'shared a moment of unplanned honesty with someone they trust',
                 'felt unexpectedly close to someone during an ordinary interaction',
-                'made someone laugh and felt the particular warmth of having done that',
-                'was thought of by someone when they did not expect to be',
-                'held a door open for a stranger and exchanged a look that meant something small',
-                'had a conversation that went slightly longer than planned because neither of them wanted it to end',
-                'received a message that arrived at exactly the right time',
-                'did a small favor for someone and did not think about it again',
-                'picked up where they left off with someone as if no time had passed',
-                'found that someone remembered a detail about them that they had mentioned only once',
-                'helped someone with something minor and felt genuinely useful',
-                'said something that someone needed to hear, without knowing it at the time',
-                'was met with patience they had not expected from someone',
-                'spent a brief moment with someone and left feeling slightly less alone',
             ],
             negative: [
                 'had an interaction that left a faintly wrong feeling they cannot name',
@@ -137,18 +96,6 @@ const EVENT_POOLS = {
                 'felt the distance between themselves and someone close grow a little wider',
                 'witnessed something between two others that made them uncomfortable',
                 'realized they had misread someone they thought they knew well',
-                'wanted to reach out to someone and talked themselves out of it',
-                'left an interaction feeling like they had given more than they received',
-                'was corrected in front of someone whose opinion matters to them',
-                'caught a flicker of something in someone else\'s expression that they could not quite read',
-                'made a small promise they are not sure they will keep',
-                'felt obligated to someone in a way that chafed',
-                'realized too late that they had said the wrong thing to the wrong person',
-                'found that a relationship they had been neglecting had quietly shifted',
-                'was kind to someone who did not deserve it and resented themselves slightly for it',
-                'ended a call or conversation feeling more alone than before it started',
-                'noticed someone pulling back and did not know whether to follow or let them go',
-                'waited for something — a word, a sign, an acknowledgment — that did not come',
             ],
         },
         Status: {
@@ -161,18 +108,6 @@ const EVENT_POOLS = {
                 'had an administrative task finally come through after delays',
                 'received something they were owed without having to ask again',
                 'gained a small practical advantage through no particular effort',
-                'found something they had lost and had written off',
-                'finished a task ahead of the time they had allotted for it',
-                'managed their resources more carefully than usual and noticed the difference',
-                'got access to something small they had been waiting on',
-                'solved a recurring practical problem in a way that actually held',
-                'had a piece of work go smoothly when they had expected it not to',
-                'received a small token of acknowledgment for something they had put effort into',
-                'cleared a minor obligation that had been sitting on the edge of their attention',
-                'found an easier way to do something they had been doing the hard way',
-                'finished a day\'s responsibilities without anything falling through the cracks',
-                'had a modest but unexpected material improvement in their situation',
-                'got through a logistical tangle with less pain than anticipated',
             ],
             negative: [
                 'an unexpected expense arrived at a bad time',
@@ -183,18 +118,6 @@ const EVENT_POOLS = {
                 'a small but relied-upon arrangement fell through',
                 'lost a minor privilege or convenience without warning',
                 'a task they had planned took much longer than expected and threw off the day',
-                'spent money they had not planned to and felt the tightness of it',
-                'had a routine disrupted in a way that cost them more time than the thing itself was worth',
-                'was given additional responsibility without any acknowledgment of the burden',
-                'discovered they had forgotten something they should not have',
-                'dealt with a piece of technology or equipment that refused to cooperate',
-                'had a completed task revert or be undone through no fault of their own',
-                'was made to wait for something that should not have taken this long',
-                'realized they were further behind than they had estimated',
-                'had a small plan for the day fail before they had properly started',
-                'lost access to something they needed at an inconvenient moment',
-                'received less than they had reasonably expected',
-                'ended the day with one more unfinished thing than they had started with',
             ],
         },
         Discovery: {
@@ -207,18 +130,6 @@ const EVENT_POOLS = {
                 'learned something small about someone that made them easier to read',
                 'realized a past assumption was slightly wrong, and the correction was a relief',
                 'encountered something that gave them a new way to think about an old problem',
-                'found a route or shortcut or method they had not known about',
-                'overheard something in passing that clarified something they had been quietly wondering',
-                'came across an account or story that resonated in a way they did not expect',
-                'learned something about a place or object that added texture to what had been familiar',
-                'noticed something in their environment they had walked past a hundred times without seeing',
-                'picked up a skill or piece of knowledge almost by accident',
-                'found confirmation for something they had only suspected before',
-                'learned something small about their own body or mind that was useful rather than alarming',
-                'discovered that something they had dismissed out of hand was worth a second look',
-                'came across an old note or record of their own that reminded them of something worth keeping',
-                'found that a question they had given up on had a simple answer they had not tried',
-                'learned something that reframed a trivial irritation as something more understandable',
             ],
             negative: [
                 'found out something minor that they would have preferred not to know',
@@ -229,18 +140,6 @@ const EVENT_POOLS = {
                 'came across information that reopened something they thought was settled',
                 'realized they had been operating on a wrong assumption for longer than they thought',
                 'found evidence of something they had been telling themselves was not happening',
-                'learned something that made a familiar situation feel slightly less safe',
-                'found out that something they had trusted turned out to have a flaw',
-                'noticed something off about a place or person they had always taken for granted',
-                'came across something that confirmed a suspicion they had hoped was unfounded',
-                'discovered they had missed something obvious that others had not',
-                'learned something that recontextualized a past interaction in an unflattering light',
-                'found out they had been the last to know about something',
-                'overheard a version of events that made them question their own memory',
-                'stumbled onto something they were not supposed to see and could not unsee it',
-                'realized something they had said was less private than they thought',
-                'learned something that made a past decision look worse than it had at the time',
-                'came across information that made a current situation feel more fragile than before',
             ],
         },
         Social: {
@@ -253,18 +152,6 @@ const EVENT_POOLS = {
                 'was seen doing something well in front of people who mattered',
                 'had a brief but pleasant exchange in a public setting',
                 'found the crowd or atmosphere of a place unexpectedly agreeable',
-                'was welcomed somewhere without having to work for it',
-                'managed to be useful to a group in a way that was noticed',
-                'found that an event they had been dreading turned out to be tolerable',
-                'was introduced to someone new under comfortable circumstances',
-                'witnessed something in a public space that reminded them people can be decent',
-                'got a small laugh from a group and felt the warmth of it',
-                'was given credit for something in front of others and accepted it without deflecting',
-                'left a gathering having said exactly the right amount and no more',
-                'found themselves in the right room at the right moment without having planned it',
-                'was included in an inside reference by a group, which meant something',
-                'observed something happening around them and felt part of it rather than separate from it',
-                'navigated a mixed social group without taking on anyone else\'s tensions',
             ],
             negative: [
                 'endured a social obligation that drained more than expected',
@@ -275,18 +162,6 @@ const EVENT_POOLS = {
                 'was subjected to an opinion or behavior they could not easily challenge',
                 'left a social situation with the vague feeling of having performed badly',
                 'felt their status within a group shift slightly in the wrong direction',
-                'spent time around people and came away feeling more alone than before',
-                'was talked over in a group and it was not worth making a point of',
-                'watched someone else receive the credit for something they had also contributed to',
-                'had to smile at something they found offensive and disliked themselves for it',
-                'felt conspicuous in a crowd in a way that had nothing to do with anyone else',
-                'overcommitted to a social obligation they already knew they would regret',
-                'was the only one in a room who did not know something everyone else seemed to know',
-                'had to maintain a version of themselves they were tired of maintaining',
-                'left before they wanted to or stayed longer than was good for them',
-                'felt the particular loneliness of being in a group and not belonging to it',
-                'was the recipient of someone else\'s misplaced frustration and absorbed it without complaint',
-                'came away from a social encounter having learned that someone thought less of them than they had assumed',
             ],
         },
     },
@@ -302,18 +177,6 @@ const EVENT_POOLS = {
                 'reached a private resolution that gave them a sense of direction',
                 'had an experience that cracked open something they had kept sealed',
                 'took a meaningful step toward something that matters to them',
-                'finally said no to something they had always said yes to, and it held',
-                'got honest with themselves about something they had been softening for a long time',
-                'did something for themselves they had been putting off for someone else\'s sake',
-                'broke a routine that was keeping them stuck and felt the change immediately',
-                'found something worth working toward that they had not had before',
-                'came through a difficult stretch and noticed they were still standing',
-                'recognized something about themselves that others had tried to tell them for years',
-                'gave themselves permission to grieve something they had been pretending to be over',
-                'acted on an instinct they usually suppress and it turned out to be right',
-                'let themselves be seen in a way they usually control carefully',
-                'finished something long unfinished and felt the particular weight of it lift',
-                'accepted something they cannot change and stopped spending energy against it',
             ],
             negative: [
                 'had a crisis of confidence that shook something they thought was settled',
@@ -324,18 +187,6 @@ const EVENT_POOLS = {
                 'realized they have been lying to themselves about something important',
                 'felt something close to breaking point over something others might call minor',
                 'went through something alone that they should not have had to go through alone',
-                'watched themselves repeat a mistake and could not stop it in time',
-                'lost confidence in something that had always been a source of it',
-                'reached the end of a coping strategy that no longer works',
-                'felt like the version of themselves they are now is a step back from who they were',
-                'had to face something about their situation that they had been calling temporary',
-                'caught themselves in a lie they had been telling themselves for long enough to believe it',
-                'felt the weight of choices they cannot take back settling on them more heavily than usual',
-                'noticed that their inner life has become very quiet in a way that worries them',
-                'reached a point where keeping going requires more effort than usual and they are not sure why',
-                'acknowledged to themselves that they need help and do not know where to get it',
-                'felt genuinely afraid of something in their own future for the first time in a while',
-                'lost the thread of who they are when they are not performing for others',
             ],
         },
         Relationship: {
@@ -348,18 +199,6 @@ const EVENT_POOLS = {
                 'finally asked for help from someone and was not let down',
                 'reconnected with someone they had drifted from in a way that felt real',
                 'realized the depth of a relationship that they had been taking for granted',
-                'received honesty from someone that hurt and helped in equal measure',
-                'made a commitment to someone in a way that changed the nature of what they share',
-                'found in someone an unexpected witness to something they had never told anyone',
-                'was defended by someone in a moment when they could not defend themselves',
-                'had a fight with someone that cleared the air instead of damaging it',
-                'realized that someone has been carrying something for them without being asked',
-                'found that a relationship they had given up on still had something left in it',
-                'was chosen, in a moment of decision, by someone who could have chosen otherwise',
-                'experienced a moment of genuine understanding with someone who usually misunderstands them',
-                'found that someone knows them better than they realized and that this is a comfort',
-                'let someone in past a boundary they usually hold and did not regret it',
-                'discovered a shared history with someone that reframes what they already knew about each other',
             ],
             negative: [
                 'had a fight with someone important that left real damage behind',
@@ -370,18 +209,6 @@ const EVENT_POOLS = {
                 'realized that someone they relied on is not who they thought',
                 'watched a relationship slide toward something worse without knowing how to stop it',
                 'was forced to choose between two people or loyalties and made the choice',
-                'found out they had been confided in by the wrong person about the wrong thing',
-                'realized that someone who cares about them is hurting because of something they did',
-                'watched a relationship they had tried to save decide it did not want to be saved',
-                'felt the particular loneliness of being misunderstood by someone who knows them well',
-                'was let down by someone at a moment when it cost more than usual',
-                'had to be the one to end something and carry the weight of having done it',
-                'discovered that a version of themselves exists in someone else\'s mind that they cannot correct',
-                'lost something in a relationship that will not come back even if everything else does',
-                'realized that they have been the difficult one in a dynamic they had understood differently',
-                'was told something true about themselves by someone who did not intend it as a kindness',
-                'found that a relationship they had thought was mutual was not',
-                'had to hold themselves together in front of someone who was the reason they were falling apart',
             ],
         },
         Status: {
@@ -394,18 +221,6 @@ const EVENT_POOLS = {
                 'gained the trust or backing of someone whose support carries real weight',
                 'got out of an obligation or arrangement that had been limiting them',
                 'achieved something in their work or responsibilities that they are actually proud of',
-                'had a run of competence that changed how they are seen where it counts',
-                'got through a high-stakes situation that required them to perform and they did',
-                'found a way to convert something they are good at into something that benefits them materially',
-                'was given a chance by someone who did not have to give it',
-                'cleared a debt — financial, social, or moral — that had been weighing on them',
-                'established themselves in a context where they had previously been uncertain',
-                'had work they did alone get recognized by someone who mattered',
-                'gained access to a resource or network that changes what is possible for them',
-                'moved from a position of dependency to one of slightly more control',
-                'was trusted with something important enough that the trust itself changed how they carry themselves',
-                'received something concrete that proved they are further along than they thought',
-                'found that an investment of time or effort paid off in a way they could not have predicted',
             ],
             negative: [
                 'lost something material or practical that will take time and effort to recover from',
@@ -416,18 +231,6 @@ const EVENT_POOLS = {
                 'lost the support or backing of someone whose opinion carries weight',
                 'was passed over for something they deserved and felt the injustice of it',
                 'had a practical arrangement that underpinned their stability fall apart',
-                'was outmaneuvered by someone in a context where it cost them something real',
-                'found themselves in a position that requires them to ask for something and they hate having to ask',
-                'had a run of poor performance at the worst possible moment',
-                'discovered that a resource they counted on is no longer available to them',
-                'had their competence questioned in front of the wrong people',
-                'lost ground they had worked hard to gain and do not see a clear way to get it back',
-                'found that a plan that seemed solid has a hole in it that others have noticed',
-                'received less than they were owed and had no good way to press for it',
-                'realized their current situation is more precarious than they had allowed themselves to acknowledge',
-                'had something they had been building come apart faster than it had gone together',
-                'lost an advantage they had taken for granted until it was gone',
-                'found themselves on the wrong side of a decision they had no part in making',
             ],
         },
         Discovery: {
@@ -440,18 +243,6 @@ const EVENT_POOLS = {
                 'found out something about their past that explains more than they expected',
                 'learned something that shifts their understanding of someone important to them',
                 'received information that opens a door they thought was permanently closed',
-                'found out that a fear they had been carrying was based on incomplete information',
-                'discovered that something they assumed was working against them has actually been working for them',
-                'learned something that retroactively makes sense of a long stretch of confusion',
-                'found out that someone they dismissed was right about something significant',
-                'uncovered a pattern in their own history that shows them something useful about themselves',
-                'received confirmation that something they believed in privately was not wrong',
-                'found out that a situation they thought they had no power over has more give in it than they thought',
-                'learned something that turns an apparent loss into something more complicated',
-                'discovered that they had been given more credit than they knew',
-                'found a piece of information that, quietly and without drama, changes what they will do next',
-                'learned something about a person from their past that lets them release something they had been holding',
-                'came across a truth that simplifies something they had made very complicated',
             ],
             negative: [
                 'found out something about someone they trusted that they cannot reconcile',
@@ -462,18 +253,6 @@ const EVENT_POOLS = {
                 'discovered a truth that closes off an option they were counting on',
                 'came across evidence of something that forces them to re-examine the recent past',
                 'learned something that makes it impossible to continue as if they did not know',
-                'found out that they misread something important for long enough to cause damage',
-                'discovered that a version of a situation they had been given was shaped to leave things out',
-                'learned that someone they trusted had access to something they thought was private',
-                'came across information that collapses the distance between a fear and a reality',
-                'found out they were wrong about something in a way that implicates more than just that one thing',
-                'learned something that makes a past kindness they received feel different in retrospect',
-                'discovered that someone had made a decision about them without consulting them',
-                'found out that something they let slide turned into something that did not resolve itself',
-                'came across evidence that one of their assumptions has been actively wrong for some time',
-                'learned something that makes the next necessary conversation unavoidable',
-                'found out they have been on the wrong side of something and cannot pretend otherwise',
-                'discovered that a truth they had been given was only part of the story and the rest is worse',
             ],
         },
         Social: {
@@ -486,18 +265,6 @@ const EVENT_POOLS = {
                 'helped someone publicly in a way that cost them something and earned real respect',
                 'had a social reputation repaired after a period of quiet damage',
                 'forged a connection in a group setting that has real future potential',
-                'found that a group they had been peripheral to had quietly made space for them',
-                'demonstrated something about themselves in public that they had never had a chance to before',
-                'was the person who held a group together at a moment when it could have fractured',
-                'received acknowledgment from a group for something they had done without expectation',
-                'found that their presence in a room was noticed in the right way at the right time',
-                'was given information or access that signals they are more trusted than they realized',
-                'managed a public moment with enough grace that it changed how people positioned themselves toward them',
-                'was included in a conversation at a level they had not been before',
-                'helped resolve something between others in a way that made them central without making them the story',
-                'found that their standing in a group had quietly improved while they were not watching it',
-                'earned something from a community that cannot be bought or performed into existence',
-                'was the person in a group who said the thing that needed to be said and was not punished for it',
             ],
             negative: [
                 'was publicly embarrassed or undermined in a way that will be remembered',
@@ -508,18 +275,6 @@ const EVENT_POOLS = {
                 'was associated with something or someone in a way that damaged how they are seen',
                 'watched a social environment they depended on fracture around them',
                 'became the focus of group judgment in a way that is hard to recover from quickly',
-                'was made the subject of a story being told about them that they have no way to correct',
-                'watched someone else take up space in a group that had previously been theirs',
-                'found that a loyalty they demonstrated was not returned when they needed it',
-                'said something in a group that was taken in the wrong direction and cannot be unsaid',
-                'discovered that their absence from something was interpreted in a way they did not intend',
-                'was put in a position by someone else that made them look bad without any recourse',
-                'found that a group they had invested in had limits to how far it would go for them',
-                'was used as an example in a way that was technically fair but still stung',
-                'learned that something they did in a social context had reached further than they realized',
-                'had their credibility questioned in a group setting and had insufficient ground to recover it immediately',
-                'found that a misunderstanding about them within a group has taken on a life of its own',
-                'was the last to understand a shift in a social dynamic that everyone else had already adjusted to',
             ],
         },
     },
@@ -535,18 +290,6 @@ const EVENT_POOLS = {
                 'finally let go of something they had been carrying that was costing them everything',
                 'chose themselves in a situation where they had always chosen otherwise before',
                 'survived something that would have broken an earlier version of them',
-                'became, in some irreversible way, more themselves than they had previously been allowed to be',
-                'crossed through a threshold they had been standing at the edge of for years and did not turn back',
-                'discovered that they are capable of something they had genuinely believed was beyond them',
-                'freed themselves from a version of their own story that no longer fits',
-                'made peace with something they had been at war with for so long it had become part of how they moved',
-                'decided something about the shape of their future that cannot be undecided',
-                'found, at last, something they can build around',
-                'did the thing they were most afraid to do and found out the fear was the worst part',
-                'accepted a truth about themselves that changes what is possible for them',
-                'walked away from something that was familiar and toward something that is true',
-                'reached the other side of a long and serious internal reckoning',
-                'became someone who has been through something real, and knows it',
             ],
             negative: [
                 'reached a breaking point that has been building for longer than anyone knew',
@@ -557,18 +300,6 @@ const EVENT_POOLS = {
                 'did something they cannot take back and will have to live with',
                 'had the version of themselves they showed the world shatter in front of people who mattered',
                 'discovered that something they built their life around is not what they believed it was',
-                'came apart in a way they are not sure they can put back together the same way',
-                'reached the end of something they had thought was permanent and found it was not',
-                'faced a truth about themselves that closes off a story they had been living inside',
-                'found out what they are like when everything stops working at once',
-                'lost the version of the future they had been organizing their present around',
-                'did damage to their own life that will require years to undo, if it can be undone',
-                'discovered that the worst thing they feared about themselves may have been true',
-                'had to witness themselves fail at something that mattered more than anything they said it did',
-                'fell in a way that was not dramatic but was definitive',
-                'found out who they are when there is no one watching and did not like the answer',
-                'crossed a line they cannot pretend they did not know was there',
-                'became someone who has lost something that cannot be replaced and will have to keep living anyway',
             ],
         },
         Relationship: {
@@ -581,18 +312,6 @@ const EVENT_POOLS = {
                 'was chosen by someone in a way that changed what they believe they deserve',
                 'repaired something that everyone including them had written off as finished',
                 'found out that someone has loved or supported them in ways they never knew',
-                'let someone matter to them in a way they had been refusing to allow for a long time',
-                'was witnessed at their worst by someone who stayed anyway',
-                'gave someone something they cannot take back and found it was the right thing to give',
-                'had a relationship become something so different from what it was that it is almost a new thing',
-                'found, in another person, something they had stopped believing was findable',
-                'made a sacrifice for someone that cost them seriously and does not regret it',
-                'was loved in a way that healed something they had not told anyone was broken',
-                'built something with someone that will outlast the moment',
-                'changed how they relate to people because one person showed them it could be different',
-                'received from someone the one thing they had needed for a long time and not known how to ask for',
-                'had something between two people become something that belongs to both of them now',
-                'discovered that one person, in the right circumstances, can restructure what you believe is possible',
             ],
             negative: [
                 'lost someone important from their life in a way that does not have a clean ending',
@@ -603,18 +322,6 @@ const EVENT_POOLS = {
                 'watched someone they love make a choice that separates them',
                 'was left by someone and it reached parts of them they did not know were still open',
                 'had to cut someone out of their life to survive it and is not sure they did the right thing',
-                'found out that a person who shaped them did not know them at all',
-                'lost the one relationship they had believed was immune to the things that end relationships',
-                'was loved wrongly by someone for long enough that it changed how they receive love',
-                'watched something that had been the center of their life become a thing they used to have',
-                'found out that the version of them someone fell in love with was not the one they have become',
-                'discovered that they had been the substitute for something they did not know they were competing with',
-                'had the worst of themselves confirmed by someone who had promised to see the best',
-                'realized too late that they had treated someone as permanent when that person was already leaving',
-                'lost someone in a way that was not a fight or a decision but a slow drift they could not stop',
-                'was present for the exact moment when something between two people became unrepairable',
-                'found out what it means to have mattered to someone and still not have been enough',
-                'had to become the person who remains after someone else was the one who left',
             ],
         },
         Status: {
@@ -627,18 +334,6 @@ const EVENT_POOLS = {
                 'resolved a long-running practical crisis in a way that actually holds',
                 'attained a degree of stability or security they have not had in years',
                 'was publicly recognized in a way that changes their standing in a permanent and meaningful way',
-                'moved from a position of significant vulnerability to one of real footing',
-                'obtained something that gives them a form of protection they have never had before',
-                'was elevated to a position they did not believe they would reach within this lifetime',
-                'had their circumstances change in a way that removes a constraint they had organized their whole life around',
-                'was given the kind of opportunity that does not come twice',
-                'acquired something — tangible or otherwise — that changes the calculus of their future',
-                'reached a material position that makes the thing they most feared no longer quite as possible',
-                'was proven right in a public and consequential way',
-                'got out from under something that had defined the limits of everything else',
-                'received backing from a direction that removes the central obstacle they have been facing',
-                'secured a future for themselves or someone they love that had been genuinely uncertain',
-                'arrived, by some combination of effort and circumstance, somewhere they had been trying to reach for a long time',
             ],
             negative: [
                 'lost their livelihood, housing, or another material foundation of their life',
@@ -649,18 +344,6 @@ const EVENT_POOLS = {
                 'had something they built taken from them in a way that feels definitive',
                 'was stripped of something — a role, a right, a resource — that they depended on',
                 'fell from a standing they worked years to reach and cannot easily reconstruct',
-                'found out that the thing that was supposed to be secure was not',
-                'lost access to something that had been underwriting the rest of their life',
-                'had something collapse that they had been assured would hold',
-                'was made to account, publicly, for something that is now beyond accounting for',
-                'found out that a legal, financial, or institutional reality is not what they had been told it was',
-                'had their options reduced, rapidly and definitively, to fewer than they have had in years',
-                'discovered that the thing they had been working toward is no longer available to them',
-                'found themselves at the beginning of a loss whose full extent they cannot yet see',
-                'lost ground that cannot be recovered the way it was taken',
-                'had a system that was designed to protect them fail when it mattered most',
-                'found that the cost of something they did is arriving all at once',
-                'was removed from something — forcibly or structurally — in a way they cannot contest',
             ],
         },
         Discovery: {
@@ -673,18 +356,6 @@ const EVENT_POOLS = {
                 'uncovered something that gives them leverage or safety they have never had before',
                 'discovered that something they mourned is not as lost as they believed',
                 'came across a truth that closes a chapter they could never quite finish',
-                'found out that a wrong done to them was not forgotten by everyone who witnessed it',
-                'learned something that gives them back a piece of their own story they thought was gone',
-                'discovered a truth that makes forgiveness, if they want it, genuinely possible',
-                'found out something that retroactively explains a significant portion of their suffering',
-                'learned something that changes who they believe they are in ways they will need time to absorb',
-                'uncovered a truth about where they come from that changes how they understand their own shape',
-                'received information that clarifies something they had carried as a private wound for years',
-                'found out that they were not wrong about something they had been made to doubt for a long time',
-                'learned something that reframes the worst thing that happened to them as not entirely what it seemed',
-                'discovered that someone they had counted out still exists in their life in a form that matters',
-                'came across a truth that makes the future, for the first time in a while, feel genuinely open',
-                'found out something that proves a version of events they had been the only one to remember',
             ],
             negative: [
                 'discovered a truth about someone central to their life that cannot be reconciled with who they thought that person was',
@@ -695,18 +366,6 @@ const EVENT_POOLS = {
                 'found out something is happening — or has happened — that they cannot protect themselves or others from now that they know',
                 'learned something that requires them to act and the action will cost them',
                 'came across a truth that closes off the version of the future they were working toward',
-                'found out that a foundational thing they believed about their own life was not true',
-                'discovered that someone they trusted made decisions about them that they had no knowledge of',
-                'learned something that cannot be unknown and whose knowing changes what they are responsible for',
-                'found out that a version of a story has been in circulation for years and it is not theirs',
-                'came across evidence that changes the meaning of something they thought they had already reckoned with',
-                'discovered that the person they have been trying to become was built on a false understanding',
-                'found out that they are not the only one something was done to',
-                'learned something that makes a decision they cannot revisit look completely different',
-                'discovered that what they believed was a past they had left behind was still present somewhere in their life',
-                'found out something that means the thing they are most afraid of is more likely than they had told themselves',
-                'came across a truth that forces them to choose between knowing and being able to function as if they do not',
-                'learned something that makes it impossible to see a significant part of their life the same way again',
             ],
         },
         Social: {
@@ -719,18 +378,6 @@ const EVENT_POOLS = {
                 'forged an alliance or coalition that gives them real collective power',
                 'was accepted into a circle or institution that meaningfully changes their access and options',
                 'did something publicly that will be remembered and associated with them long-term',
-                'became, in a community that matters to them, the kind of person others organize themselves around',
-                'was given a role in a group that changes what is possible for them in every direction',
-                'found belonging where they had expected to remain peripheral and it changed what they believed about themselves',
-                'acted in a public moment in a way that will define how they are understood for a long time',
-                'created something with others that none of them could have made alone and that will outlast the moment',
-                'was the person who said or did the thing that changed the direction of something larger than themselves',
-                'was trusted with a responsibility by a community that requires them to become something larger than what they have been',
-                'emerged from a public crisis with more standing than they had going in',
-                'was seen doing something real, in public, that aligned completely with who they actually are',
-                'built a reputation in a place where reputation is the material from which everything else is made',
-                'found that a community they had doubted would have them made permanent space for them',
-                'became the kind of person in a social world who is named when someone needs to know who to trust',
             ],
             negative: [
                 'was publicly exposed, condemned, or cast out from a community they depended on',
@@ -741,18 +388,6 @@ const EVENT_POOLS = {
                 'was made an example of in front of people whose opinion shapes their world',
                 'lost a network or community that had been their primary source of support and identity',
                 'was involved in a public incident that will follow them for a long time',
-                'had their name become attached to something they cannot fully separate themselves from',
-                'lost a social world they had built over years in a matter of days',
-                'was publicly held responsible for something whose origins were more complicated than the story that spread',
-                'found that the community they had trusted most was the one least willing to stand with them when it mattered',
-                'was made into a symbol of something they did not choose and cannot control',
-                'had the thing they had done privately become the thing they are known for',
-                'found out that their removal from a group was discussed and decided before they had any idea it was coming',
-                'was cut from something by consensus in a way that made the isolation total',
-                'had a version of themselves circulate in public that bears just enough resemblance to the truth to be impossible to deny',
-                'lost the social capital they had spent years building in a moment they cannot fully account for',
-                'was publicly associated with a failure or wrongdoing in a way that others will not quickly separate from their name',
-                'found out what it means to be outside a community that once felt like the definition of where they belonged',
             ],
         },
     },
@@ -764,7 +399,6 @@ const CATEGORIES = Object.keys(EVENT_POOLS.minor);
 
 let msgCounter = 0;
 let lastChatLength = 0;  // tracks chat size to detect rerolls
-let lastBotMessageId = null; // tracks last bot message to detect rerolls accurately
 let isGenerating = false; // guard against re-entrant generation
 let lastProcessedMsgId = null; // deduplicate MESSAGE_RECEIVED + CHARACTER_MESSAGE_RENDERED
 
@@ -791,14 +425,13 @@ function getBotKey() {
 function getChatKey() {
     try {
         const ctx = SillyTavern.getContext();
+        // ST stores current chat filename in ctx.getCurrentChatId() or ctx.chatId
         const chatId = (typeof ctx.getCurrentChatId === 'function' ? ctx.getCurrentChatId() : null)
             || ctx.chatId
-            || ctx.selected_group;
-        if (chatId) { console.log('[WildOffscreen] getChatKey →', String(chatId)); return String(chatId); }
-        const firstMsg = ctx.chat?.[0];
-        if (firstMsg?.send_date) { const k = 'chat_' + String(firstMsg.send_date); console.log('[WildOffscreen] getChatKey fallback →', k); return k; }
-        console.log('[WildOffscreen] getChatKey → default');
-        return 'default';
+            || ctx.selected_group
+            || (ctx.chat?.length ? 'chat_' + ctx.chat[0]?.send_date : null)
+            || 'default';
+        return String(chatId);
     } catch(e) { return 'default'; }
 }
 
@@ -829,43 +462,6 @@ function getChatStore() {
     return store[chatKey];
 }
 
-// ── Internal time (text mode) ──────────────────────────
-
-function getInternalTime() {
-    const s = getSettings();
-    const botKey = getBotKey();
-    const chatKey = getChatKey();
-    const raw = s.npcData?.[botKey]?.[chatKey]?.__internalTime;
-    return raw || null; // { date: 'YYYY/MM/DD', time: 'HH:MM' } or null
-}
-
-function saveInternalTime(dateStr, timeStr) {
-    const s = getSettings();
-    const botKey = getBotKey();
-    const chatKey = getChatKey();
-    if (!s.npcData) s.npcData = {};
-    if (!s.npcData[botKey]) s.npcData[botKey] = { __npcs: {} };
-    if (!s.npcData[botKey][chatKey]) s.npcData[botKey][chatKey] = {};
-    s.npcData[botKey][chatKey].__internalTime = { date: dateStr, time: timeStr };
-    saveSettingsDebounced();
-}
-
-function advanceInternalTime() {
-    const s = getSettings();
-    const current = getInternalTime();
-    if (!current) return null;
-
-    const minutes = s.minutesPerExchange || 5;
-    const [h, m] = current.time.split(':').map(Number);
-    const totalMin = h * 60 + m + minutes;
-    const newH = Math.floor(totalMin / 60) % 24;
-    const newM = totalMin % 60;
-    // Handle day rollover simply — keep same date (for simplicity, days don't advance)
-    const newTime = String(newH).padStart(2, '0') + ':' + String(newM).padStart(2, '0');
-    saveInternalTime(current.date, newTime);
-    return { date: current.date, time: newTime };
-}
-
 /** Returns merged NPC objects: identity from __npcs + runtime data from chatStore */
 function getNPCs() {
     const store = getNPCStore();
@@ -886,38 +482,10 @@ function getNPCs() {
     return merged;
 }
 
-async function saveNPCsPartial(npcs) {
-    // Save only the provided NPCs without touching others in storage
-    const s = getSettings();
-    const botKey = getBotKey();
-    const chatKey = getChatKey();
-    if (!s.npcData) s.npcData = {};
-    if (!s.npcData[botKey]) s.npcData[botKey] = { __npcs: {} };
-    if (!s.npcData[botKey].__npcs) s.npcData[botKey].__npcs = {};
-    if (!s.npcData[botKey][chatKey]) s.npcData[botKey][chatKey] = {};
-    for (const [name, npc] of Object.entries(npcs)) {
-        // Only update runtime data (events/facts/location) — don't touch identity
-        const existingData = s.npcData[botKey][chatKey][name] || {};
-            s.npcData[botKey][chatKey][name] = {
-            events: npc.events && npc.events.length > 0 ? npc.events : (existingData.events || []),
-            permanentFacts: npc.permanentFacts && npc.permanentFacts.length > 0 ? npc.permanentFacts : (existingData.permanentFacts || []),
-            lastLocation: npc.lastLocation !== undefined ? npc.lastLocation : (existingData.lastLocation || null),
-        };
-        // Also update identity fields that may have changed
-        if (s.npcData[botKey].__npcs[name]) {
-            s.npcData[botKey].__npcs[name].pendingIntro = npc.pendingIntro ?? false;
-        }
-    }
-    console.log('[WildOffscreen] saveNPCsPartial | keys:', Object.keys(npcs), '| chatKey:', chatKey);
-    saveSettingsDebounced();
-}
-
 async function saveNPCs(npcs) {
     const s = getSettings();
     const botKey = getBotKey();
     const chatKey = getChatKey();
-    const eventCounts = Object.fromEntries(Object.entries(npcs).map(([k,v]) => [k, v.events?.length || 0]));
-    console.log('[WildOffscreen] saveNPCs | chatKey:', chatKey, '| eventCounts:', eventCounts, '| caller:', new Error().stack.split('\n')[2]?.trim());
     if (!s.npcData) s.npcData = {};
     if (!s.npcData[botKey]) s.npcData[botKey] = { __npcs: {} };
     if (!s.npcData[botKey].__npcs) s.npcData[botKey].__npcs = {};
@@ -937,12 +505,11 @@ async function saveNPCs(npcs) {
             pendingIntro: npc.pendingIntro ?? false,
         };
         // Save runtime (events/facts/location) per chat
-        const existingData = s.npcData[botKey][chatKey][name] || {};
         s.npcData[botKey][chatKey][name] = {
-        events: npc.events && npc.events.length > 0 ? npc.events : (existingData.events || []),
-        permanentFacts: npc.permanentFacts && npc.permanentFacts.length > 0 ? npc.permanentFacts : (existingData.permanentFacts || []),
-        lastLocation: npc.lastLocation !== undefined ? npc.lastLocation : (existingData.lastLocation || null),
-    };
+            events: npc.events || [],
+            permanentFacts: npc.permanentFacts || [],
+            lastLocation: npc.lastLocation || null,
+        };
     }
     saveSettingsDebounced();
 }
@@ -971,7 +538,6 @@ async function clearChatData() {
         delete s.npcData[botKey][chatKey];
     }
     saveSettingsDebounced();
-    updateDateDisplay();
 }
 
 // ── NPC entry detection ────────────────────────────────────
@@ -1396,74 +962,14 @@ function parseInfoblockChars(mes) {
  * Check if an NPC appears in a message's infoblock character list.
  * Exact match or infoblock name contains NPC name (handles full name vs surname).
  */
-// Parse a lorebook key that may be a /regex/flags string
-function parseKeyAsRegex(key) {
-    const m = key.match(/^\/(.+)\/([gimsuy]*)$/);
-    if (!m) return null;
-    try { return new RegExp(m[1], m[2] || 'i'); } catch(e) { return null; }
-}
-
 function npcInInfoblock(npc, mes) {
     const chars = parseInfoblockChars(mes);
     if (!chars.length) return false;
-
-    const charsText = chars.join(', ');
-    const npcLower  = npc.name.toLowerCase();
-
-    const directMatch = chars.some(c => {
+    const npcLower = npc.name.toLowerCase();
+    return chars.some(c => {
         const cl = c.toLowerCase().trim();
         return cl === npcLower || cl.includes(npcLower);
     });
-    if (directMatch) return true;
-
-    const keys = Array.isArray(npc.searchKeys) ? npc.searchKeys : [];
-    for (const key of keys) {
-        if (!key || typeof key !== 'string') continue;
-        const rx = parseKeyAsRegex(key);
-        if (rx) {
-            if (rx.test(charsText)) return true;
-        } else {
-            if (key.length >= 2 && charsText.toLowerCase().includes(key.toLowerCase())) return true;
-        }
-    }
-    return false;
-}
-
-/**
- * Text-mode scene detection: check if NPC is mentioned in the last N bot messages.
- * Uses name + searchKeys (plain and regex) against raw message text.
- */
-function npcInRecentMessages(npc, depth) {
-    try {
-        const ctx = SillyTavern.getContext();
-        const chat = ctx.chat || [];
-        // Get last `depth` bot messages
-        const botMsgs = [...chat].reverse().filter(m => !m.is_user && !m.is_system && m.mes).slice(0, depth);
-        if (!botMsgs.length) return false;
-
-        const npcLower = npc.name.toLowerCase();
-        const keys = Array.isArray(npc.searchKeys) ? npc.searchKeys : [];
-        const nameParts = npc.name.trim().split(/\s+/).filter(p => p.length > 2);
-
-        for (const msg of botMsgs) {
-            const text = msg.mes.replace(/<[^>]+>/g, '').toLowerCase();
-
-            // Direct name match
-            if (text.includes(npcLower)) return true;
-
-            // Name parts
-            if (nameParts.some(p => text.includes(p.toLowerCase()))) return true;
-
-            // Search keys
-            for (const key of keys) {
-                if (!key || typeof key !== 'string') continue;
-                const rx = parseKeyAsRegex(key);
-                if (rx) { if (rx.test(text)) return true; }
-                else if (key.length >= 2 && text.includes(key.toLowerCase())) return true;
-            }
-        }
-        return false;
-    } catch(e) { return false; }
 }
 
 // ── Chat context ───────────────────────────────────────────
@@ -1477,12 +983,8 @@ function getChatContextForNPC(npc, maxMessages = 30, maxCharsPerMsg = 3000) {
         const chat = ctx.chat || [];
         const nonSystem = chat.filter(m => !m.is_system && m.mes);
 
-        // Find messages where this NPC appears — infoblock or text scan depending on mode
-        const _ctxMode = getSettings().sceneMode || 'infoblock';
-        const withNPC = nonSystem.filter(m => {
-            if (_ctxMode === 'text') return npcInRecentMessages(npcObj, 999); // scan all for context
-            return npcInInfoblock(npcObj, m.mes);
-        });
+        // Find messages where this NPC appears in the infoblock character list
+        const withNPC = nonSystem.filter(m => npcInInfoblock(npcObj, m.mes));
 
         let selected;
         if (withNPC.length > 0) {
@@ -1547,30 +1049,25 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext, sceneInfo)
 
         // Detect if this NPC is currently in the active scene
         let inScene = false;
-        const s2 = getSettings();
         const sceneChars = (sceneInfo && Array.isArray(sceneInfo.characters)) ? sceneInfo.characters : [];
-        const searchKeys = Array.isArray(npc.searchKeys) ? npc.searchKeys : [];
-        if (s2.sceneMode === 'text') {
-            // Text mode: check if NPC appears in recent bot messages
-            inScene = npcInRecentMessages(npc, s2.keywordScanDepth || s2.textModeDepth || 2);
-            console.log('[WildOffscreen] TEXT MODE — NPC', npc.name, '→', inScene ? 'IN SCENE' : 'OFFSCREEN');
-        } else if (sceneChars.length > 0) {
-            // Infoblock mode: direct name match, + optional keyword scan
+        if (sceneChars.length > 0) {
             const npcNameLower = npc.name.toLowerCase();
-            const directMatch = sceneChars.some(c => {
+            const searchKeys = Array.isArray(npc.searchKeys) ? npc.searchKeys : [];
+            inScene = sceneChars.some(c => {
                 if (!c || typeof c !== 'string') return false;
                 const cl = c.toLowerCase().trim();
-                return cl === npcNameLower || cl.includes(npcNameLower);
+                // Exact match OR scene char name contains NPC name as whole word (handles "Савелий Парфёнов" vs "Парфёнов")
+                // Deliberately NOT using npcNameLower.includes(cl) — too greedy, causes false positives
+                const exactOrContains = cl === npcNameLower || cl.includes(npcNameLower);
+                // Also check search keys (lorebook keys) for alternative name forms
+                const keyMatch = searchKeys.some(k => {
+                    if (!k || typeof k !== 'string' || k.length < 3) return false;
+                    const kl = k.toLowerCase().trim();
+                    return cl === kl || cl.includes(kl);
+                });
+                return exactOrContains || keyMatch;
             });
-            const kwMatch = s2.infoblockKeywordScan && !directMatch
-                ? npcInRecentMessages(npc, s2.keywordScanDepth || 2)
-                : false;
-            inScene = directMatch || kwMatch;
-            console.log('[WildOffscreen] INFOBLOCK MODE — NPC', npc.name, '→', inScene ? 'IN SCENE' : 'OFFSCREEN',
-                '| direct:', directMatch, 'keyword:', kwMatch);
-        } else {
-            console.log('[WildOffscreen] INFOBLOCK MODE — no sceneChars found, NPC', npc.name, '→ OFFSCREEN (no infoblock parsed)');
-        } // end infoblock mode
+        }
 
         const facts = Array.isArray(npc.permanentFacts) ? npc.permanentFacts : [];
         const factsBlock = facts.length
@@ -1597,16 +1094,6 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext, sceneInfo)
                     + 'Write ONE sentence (15-30 words) that applies this archetype to THIS specific character — their personality, situation, relationships, and context. Be concrete and specific to them, not generic.');
     }).join('\n\n');
 
-    // In text mode, build a minimal sceneInfo substitute (no infoblock)
-    const _bsMode = getSettings().sceneMode || 'infoblock';
-    if (_bsMode === 'text' && !sceneInfo) {
-        const it = getInternalTime();
-        if (it) {
-            // sceneInfo stays null — no character list, time comes from internal clock
-            // We'll inject time into sceneHeader manually below
-        }
-    }
-
     // Build pending intro instructions for manually added NPCs
     const pendingIntros = npcList.filter(item => item.npc.pendingIntro);
     let introBlock = '';
@@ -1620,7 +1107,7 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext, sceneInfo)
 
     // Build scene context header from parsed info-block
     let sceneHeader = '';
-    if (sceneInfo && _bsMode === 'infoblock') {
+    if (sceneInfo) {
         const inSceneNames = sceneInfo.characters.length
             ? sceneInfo.characters.join(', ')
             : 'unknown';
@@ -1634,17 +1121,6 @@ function buildBatchMessages(npcList, mainCharInfo, sharedChatContext, sceneInfo)
             + 'These characters are actively participating in the scene right now and must receive "No offscreen events. Currently in scene." with their current location.\n'
             + (timeOfDay ? 'NOTE: It is currently ' + timeOfDay + '. Generated events must be plausible for this time of day.\n' : '')
             + '===\n\n';
-    } else if (_bsMode === 'text') {
-        const it = getInternalTime();
-        if (it) {
-            const th = parseInt(it.time);
-            const tod = th < 6 ? 'night' : th < 12 ? 'morning' : th < 18 ? 'afternoon' : th < 22 ? 'evening' : 'night';
-            sceneHeader = '=== SCENE TIME INFO ===\n'
-                + 'Current date: ' + it.date + ' | Time: ' + it.time + ' (' + tod + ')\n'
-                + 'NOTE: It is currently ' + tod + '. Generated events must be plausible for this time of day.\n'
-                + 'Characters in scene are determined by recent story context — NPCs mentioned in the last messages are considered present.\n'
-                + '===\n\n';
-        }
     }
 
     const userContent = (mainCharInfo ? mainCharInfo + '\n\n' : '')
@@ -1793,28 +1269,17 @@ async function generateEventsForAllNPCs(npcs) {
     const sceneCharsForFilter = (sceneInfo && Array.isArray(sceneInfo.characters)) ? sceneInfo.characters : [];
 
     // Skip in-scene NPCs entirely — no need to send them to API
-    const _sm = getSettings();
-    console.log('[WildOffscreen] sceneMode:', _sm.sceneMode, '| sceneCharsForFilter:', sceneCharsForFilter);
-    const isInSceneCheck = (npc) => {
-        if (_sm.sceneMode === 'text') {
-            const r = npcInRecentMessages(npc, _sm.textModeDepth || 2);
-            console.log('[WildOffscreen] isInSceneCheck TEXT', npc.name, '→', r);
-            return r;
-        }
-        // Infoblock mode: ONLY match against characters explicitly listed in the infoblock
-        // Search keys are NOT used here — they are for lorebook scanning, not scene detection
+    const isInSceneCheck = (npc) => sceneCharsForFilter.some(c => {
+        if (!c || typeof c !== 'string') return false;
+        const cl = c.toLowerCase().trim();
         const nl = npc.name.toLowerCase();
-        const result = sceneCharsForFilter.some(c => {
-            const cl = (c || '').toLowerCase().trim();
-            return cl === nl || cl.includes(nl);
-        });
-        console.log('[WildOffscreen] isInSceneCheck INFOBLOCK', npc.name, '→', result, '| sceneChars:', sceneCharsForFilter);
-        return result;
-    };
+        const sk = Array.isArray(npc.searchKeys) ? npc.searchKeys : [];
+        return cl === nl || cl.includes(nl) || sk.some(k => k && typeof k === 'string' && cl.includes(k.toLowerCase()));
+    });
 
     const offscreenKeys = keys.filter(k => !isInSceneCheck(npcs[k]));
     const skippedInScene = keys.filter(k => isInSceneCheck(npcs[k]));
-    console.log('[WildOffscreen] offscreenKeys:', offscreenKeys, '| skippedInScene:', skippedInScene);
+    if (skippedInScene.length) console.log('[WildOffscreen] Skipping in-scene NPCs (no API call):', skippedInScene);
 
     if (!offscreenKeys.length) {
         console.log('[WildOffscreen] All NPCs in scene, nothing to generate.');
@@ -1885,16 +1350,8 @@ async function generateEventsForAllNPCs(npcs) {
         console.log('[WildOffscreen] Event for', npc.name, '@', result.location, ':', result.text);
     }
 
-    // Save only the NPCs that were modified (offscreen ones)
-    // Do NOT save in-scene NPCs — their data in `npcs` is stale snapshot
-    // and would overwrite any data saved between snapshot and now
-    const modifiedNpcs = {};
-    for (const { npc, key } of npcList) {
-        modifiedNpcs[key] = npc;
-    }
-    if (Object.keys(modifiedNpcs).length > 0) {
-        await saveNPCsPartial(modifiedNpcs);
-    }
+    // Save all mutations back to storage
+    await saveNPCs(npcs);
 }
 
 async function runGenerationCycle() {
@@ -1970,42 +1427,38 @@ function buildInjectionText(npcs, injectMax) {
     if (!filtered.length) return '';
     const lines = filtered.map(npc => {
         const loc = npc.lastLocation || 'unknown';
-        // Inject only last event to keep context size small
-        const last = npc.events[npc.events.length - 1];
-        const evLoc = last && last.location && last.location !== loc ? ' @' + last.location : '';
-        const evLine = last ? '  [' + (last.positive ? '+' : '-') + last.scale.toUpperCase() + evLoc + '] ' + last.text : '  —';
-        return npc.name + ' (' + loc + '): ' + evLine.trim();
+        const evLines = npc.events.slice(-3).map(e => {
+            const evLoc = e.location && e.location !== loc ? ' @' + e.location : '';
+            return '  [' + (e.positive ? '+' : '-') + e.scale.toUpperCase() + evLoc + '] ' + e.text;
+        }).join('\n');
+        return '• ' + npc.name + ' (currently: ' + loc + '):\n' + evLines;
     });
     const s2 = getSettings();
     const activeIntros = s2.activeIntros || {};
     const npcsAll = Object.values(npcs);
 
-    // forceIntro: any NPC (new or existing) with activeIntros flag
-    const forceIntroNPCs = npcsAll.filter(n => activeIntros[n.name]);
-    // pendingIntro passive: new NPCs waiting for natural introduction
+    // Strong one-shot intro (button was pressed)
+    const activeIntroNames = npcsAll.filter(n => n.pendingIntro && activeIntros[n.name]).map(n => n.name);
+    // Passive background intro (just exists, waiting)
     const passiveIntroNames = npcsAll.filter(n => n.pendingIntro && !activeIntros[n.name]).map(n => n.name);
 
     let introNote = '';
-    if (forceIntroNPCs.length) {
-        introNote += '\n\n[SCENE DIRECTION — REQUIRED]\n'
-            + 'Introduce the following character(s) into this response: '
-            + forceIntroNPCs.map(n => n.name).join(', ') + '.\n'
-            + 'They must appear or be directly referenced in this message — not hinted at, not delayed.\n'
-            + 'The introduction must feel natural and fit the current location, time, and tone.\n';
-
-        for (const npc of forceIntroNPCs) {
-            const desc = (npc.lorebookDescription || npc.description || '').trim();
-            if (desc) {
-                introNote += '\nCharacter: ' + npc.name + '\n' + desc + '\n';
-            }
-        }
-        introNote += '[END SCENE DIRECTION]';
+    if (activeIntroNames.length) {
+        const names = activeIntroNames.join(', ');
+        introNote += '\n\n[!!! MANDATORY — DO NOT SKIP !!!]\n'
+            + 'You MUST introduce the following character(s) into THIS response, right now: ' + names + '.\n'
+            + 'This is not a suggestion. This character MUST physically appear or be directly referenced in the scene you are about to write.\n'
+            + 'Requirements:\n'
+            + '- They must enter, arrive, be encountered, or make their presence known within this very message\n'
+            + '- The introduction must feel natural and consistent with the current location, time of day, and tone of the scene\n'
+            + '- Do NOT delay it to the next message. Do NOT hint at their arrival. Make it happen NOW.\n'
+            + '[!!! END MANDATORY !!!]';
     }
     if (passiveIntroNames.length) {
-        introNote += '\n[Note: ' + passiveIntroNames.join(', ') + ' exist in this world and may be introduced when the moment fits naturally.]';
+        introNote += '\n[PENDING: ' + passiveIntroNames.join(', ') + ' — exists in this world, introduce naturally when the moment fits.]';
     }
 
-    return '[OFF-SCREEN NPC UPDATES]\n'
+    return '[OFF-SCREEN NPC UPDATES — use when character enters scene. Do NOT generate this block yourself.]\n'
         + lines.join('\n') + '\n[/OFF-SCREEN NPC UPDATES]'
         + introNote;
 }
@@ -2096,14 +1549,13 @@ function renderNPCList() {
     for (const key of keys) {
         const npc = npcs[key];
         const count = npc.events.length;
-        const activeIntrosNow = getSettings().activeIntros || {};
         const card = $(`
         <div class="wo_npc_card ${npc.enabled ? '' : 'wo_npc_disabled'}" data-name="${key}">
             <div class="wo_npc_header">
                 <span class="wo_npc_name">${npc.name}${npc.pendingIntro ? ' <span class="wo_intro_badge">NEW</span>' : ''}</span>
                 <span class="wo_npc_count">${npc.lastLocation ? '<i class="fa-solid fa-location-dot" style="font-size:0.8em;margin-right:3px;"></i>' : ''}${count} event${count !== 1 ? 's' : ''}</span>
                 <div class="wo_npc_actions">
-                    <button class="wo_btn_introduce menu_button ${(npc.pendingIntro || activeIntrosNow[key]) ? 'wo_btn_introduce_pulse' : ''}" title="${activeIntrosNow[key] ? 'Cancel introduction (cued)' : 'Cue introduction into next scene'}"><i class="fa-solid fa-door-open"></i></button>
+                    ${npc.pendingIntro ? '<button class="wo_btn_introduce menu_button wo_btn_introduce_pulse" title="Introduce into scene"><i class="fa-solid fa-door-open"></i></button>' : ''}
                     <button class="wo_btn_toggle menu_button">${npc.enabled ? '<i class="fa-solid fa-pause"></i>' : '<i class="fa-solid fa-play"></i>'}</button>
                     <button class="wo_btn_clear menu_button" title="Clear events"><i class="fa-solid fa-trash-can"></i></button>
                     <button class="wo_btn_delete menu_button" title="Remove NPC"><i class="fa-solid fa-xmark"></i></button>
@@ -2266,28 +1718,16 @@ function renderNPCList() {
         card.find('.wo_btn_introduce').on('click', async (e) => {
             e.stopPropagation();
             const s = getSettings();
+            const botKey = getBotKey();
+            if (!s.npcData?.[botKey]?.__npcs?.[key]) return;
+            const npcData = s.npcData[botKey].__npcs[key];
+            // One-shot: inject a strong intro instruction into the next generation
+            // Store it so buildInjectionText can pick it up
             if (!s.activeIntros) s.activeIntros = {};
-            if (s.activeIntros[key]) {
-                // Already cued — cancel it
-                delete s.activeIntros[key];
-                saveSettingsDebounced();
-                updateInjection();
-                renderNPCList();
-                toastr.info(`Introduction cancelled for ${key}.`);
-            } else {
-                s.activeIntros[key] = true;
-                // Update lastChatLength so next message doesn't trigger false reroll
-                try {
-                    const ctx = SillyTavern.getContext();
-                    lastChatLength = (ctx.chat || []).length;
-                    const lm = (ctx.chat || []).slice(-1)[0];
-                    if (lm && !lm.is_user) lastBotMessageId = (lm.mes || '').slice(0, 80);
-                } catch(e) {}
-                saveSettingsDebounced();
-                updateInjection();
-                renderNPCList();
-                toastr.info(`Introduction cued for ${key}. Character info will be sent to the model.`);
-            }
+            s.activeIntros[key] = true;
+            saveSettingsDebounced();
+            toastr.info(`Introduction cued for ${key}. It will happen at the next fitting moment.`);
+            renderNPCList();
         });
 
         card.find('.wo_btn_toggle').on('click', async () => {
@@ -2349,24 +1789,8 @@ function buildUI() {
                     <i class="fa-solid fa-chevron-down wo_acc_icon"></i>
                 </div>
                 <div class="wo_accordion_body" id="wo_sec_chars">
-                    <div class="wo_section_label" style="margin-top:6px;">Scene Detection Mode</div>
-                    <div class="wo_lang_row" id="wo_scene_mode_row">
-                        <button class="wo_scene_mode_btn menu_button" data-mode="infoblock">Info Block</button>
-                        <button class="wo_scene_mode_btn menu_button" data-mode="text">Text Scan</button>
-                    </div>
-
-                    <div class="wo_section_label">Current Story Date &amp; Time</div>
+                    <div class="wo_section_label" style="margin-top:6px;">Current Story Date</div>
                     <div id="wo_date_display"></div>
-
-                    <!-- Text mode time controls -->
-                    <div id="wo_time_controls" style="display:none;">
-                        <div style="display:flex;gap:6px;margin-top:4px;align-items:center;">
-                            <input type="text" id="wo_time_date" class="text_pole" placeholder="YYYY/MM/DD" style="flex:1;" />
-                            <input type="text" id="wo_time_hhmm" class="text_pole" placeholder="HH:MM" style="width:70px;flex-shrink:0;" />
-                            <button id="wo_time_set" class="menu_button" style="flex-shrink:0;" title="Set time"><i class="fa-solid fa-check"></i></button>
-                        </div>
-                        <div style="font-size:0.78em;opacity:0.5;margin-top:3px;">Auto +<input type="number" id="wo_minutes_per_exchange" class="text_pole" style="width:44px;display:inline;padding:1px 4px;font-size:1em;" /> min per exchange</div>
-                    </div>
 
                     <div id="wo_npc_list" class="wo_npc_list"></div>
 
@@ -2394,13 +1818,6 @@ function buildUI() {
                         <option value="before_char">before_char</option>
                         <option value="after_char">after_char</option>
                     </select>
-                    <div class="wo_section_label">Scene Detection (Info Block mode)</div>
-                    <label class="checkbox_label">
-                        <input type="checkbox" id="wo_keyword_scan" ${s.infoblockKeywordScan ? 'checked' : ''} />
-                        <span>Also scan recent messages by keywords</span>
-                    </label>
-                    <label><small>Messages to scan for keywords</small></label>
-                    <input type="number" id="wo_keyword_depth" class="text_pole" value="${s.keywordScanDepth || 2}" min="1" max="20" />
                     <div class="wo_section_label">Token Context</div>
                     <label><small>Messages history depth</small></label>
                     <input type="number" id="wo_max_messages" class="text_pole" value="${s.maxMessages || 30}" />
@@ -2503,16 +1920,6 @@ jQuery(async () => {
 
     function updateDateDisplay() {
         try {
-            const s = getSettings();
-            if (s.sceneMode === 'text') {
-                const it = getInternalTime();
-                if (it) {
-                    $('#wo_date_display').text(it.date + ' • ' + it.time);
-                } else {
-                    $('#wo_date_display').text('No time set — enter below');
-                }
-                return;
-            }
             const ctx = SillyTavern.getContext();
             const chat = ctx.chat || [];
             const lastMsg = [...chat].reverse().find(m => m.mes && hasDatePattern(m.mes));
@@ -2592,56 +1999,6 @@ jQuery(async () => {
         toastr.success('All NPCs removed.');
     });
 
-    // Scene mode buttons
-    function updateSceneModeButtons() {
-        const mode = getSettings().sceneMode || 'infoblock';
-        $('.wo_scene_mode_btn').each(function() {
-            $(this).toggleClass('wo_lang_active', $(this).data('mode') === mode);
-        });
-        if (mode === 'text') {
-            $('#wo_time_controls').show();
-            $('#wo_minutes_per_exchange').val(getSettings().minutesPerExchange || 5);
-        } else {
-            $('#wo_time_controls').hide();
-        }
-        updateDateDisplay();
-    }
-    updateSceneModeButtons();
-
-    $('.wo_scene_mode_btn').on('click', function() {
-        const s = getSettings();
-        s.sceneMode = $(this).data('mode');
-        saveSettingsDebounced();
-        updateSceneModeButtons();
-    });
-
-    $('#wo_time_set').on('click', () => {
-        const dateVal = $('#wo_time_date').val().trim();
-        const timeVal = $('#wo_time_hhmm').val().trim();
-        if (!dateVal || !timeVal) { toastr.warning('Enter both date and time.'); return; }
-        if (!/^\d{4}\/\d{2}\/\d{2}$/.test(dateVal)) { toastr.warning('Date must be YYYY/MM/DD'); return; }
-        if (!/^\d{2}:\d{2}$/.test(timeVal)) { toastr.warning('Time must be HH:MM'); return; }
-        saveInternalTime(dateVal, timeVal);
-        updateDateDisplay();
-        toastr.success('Time set to ' + dateVal + ' ' + timeVal);
-    });
-
-    $('#wo_minutes_per_exchange').on('input', function() {
-        const s = getSettings();
-        s.minutesPerExchange = parseInt(this.value) || 5;
-        saveSettingsDebounced();
-    });
-
-    // Pre-fill time inputs from current internal time if set
-    function refreshTimeInputs() {
-        const it = getInternalTime();
-        if (it) {
-            $('#wo_time_date').val(it.date);
-            $('#wo_time_hhmm').val(it.time);
-        }
-    }
-    refreshTimeInputs();
-
     // Language buttons
     function updateLangButtons() {
         const lang = getSettings().outputLanguage || 'en';
@@ -2668,8 +2025,6 @@ jQuery(async () => {
     $('#wo_max_messages').on('input', function() { s.maxMessages = parseInt(this.value) || 30; saveSettingsDebounced(); });
     $('#wo_max_chars').on('input', function() { s.maxCharsPerMsg = parseInt(this.value) || 2000; saveSettingsDebounced(); });
 
-    $('#wo_keyword_scan').on('change', function () { s.infoblockKeywordScan = this.checked; saveSettingsDebounced(); });
-    $('#wo_keyword_depth').on('input', function () { s.keywordScanDepth = parseInt(this.value) || 2; saveSettingsDebounced(); });
     $('#wo_trigger_every').on('input', function () { s.triggerEvery = parseInt(this.value) || DEFAULTS.triggerEvery; saveSettingsDebounced(); });
     $('#wo_max_events').on('input', function () { s.maxEvents = parseInt(this.value) || DEFAULTS.maxEvents; saveSettingsDebounced(); });
     $('#wo_inject_max').on('input', function () { s.injectMaxMessages = parseInt(this.value) || 0; saveSettingsDebounced(); });
@@ -2766,13 +2121,9 @@ jQuery(async () => {
     // Shared handler for bot message — called by both CHARACTER_MESSAGE_RENDERED and MESSAGE_RECEIVED
     // Uses lastProcessedMsgId to deduplicate (both events can fire for same message)
     async function onBotMessageDone() {
-        // Advance internal time in text mode (once per bot message = one exchange)
-        if (getSettings().sceneMode === 'text' && getInternalTime()) {
-            advanceInternalTime();
-        }
         updateDateDisplay();
 
-        // Auto-clear pendingIntro if NPC appeared in infoblock or recent messages
+        // Auto-clear pendingIntro if NPC appeared in infoblock
         try {
             const ctx = SillyTavern.getContext();
             const lastMsg = (ctx.chat || []).slice(-1)[0];
@@ -2810,35 +2161,18 @@ jQuery(async () => {
         try {
             const ctx = SillyTavern.getContext();
             const currentLength = (ctx.chat || []).length;
-
-            // Reroll = same length AND last bot message content changed
-            const lastMsg = (ctx.chat || []).slice(-1)[0];
-            const lastMsgIsBot = lastMsg && !lastMsg.is_user && !lastMsg.is_system;
-            const currentMsgId = lastMsgIsBot ? (lastMsg.mes || '').slice(0, 80) : null;
-
-            const lengthUnchanged = currentLength === lastChatLength && currentLength > 0;
-            const contentChanged = currentMsgId !== null && currentMsgId !== lastBotMessageId;
-            const isReroll = lengthUnchanged && contentChanged && lastBotMessageId !== null;
-
+            const isReroll = currentLength === lastChatLength && currentLength > 0;
             lastChatLength = currentLength;
-            if (currentMsgId) lastBotMessageId = currentMsgId;
 
             if (isReroll) {
-                console.log('[WildOffscreen] Reroll confirmed — content changed, removing last events');
+                console.log('[WildOffscreen] Reroll detected — removing last events');
                 const npcs = getNPCs();
                 let removed = 0;
                 for (const key of Object.keys(npcs)) {
-                    if (!npcs[key].enabled || !npcs[key].events.length) continue;
-                    const lastEvent = npcs[key].events[npcs[key].events.length - 1];
-                    npcs[key].events.pop();
-                    // Also remove auto-promoted fact that matches this event (if any)
-                    if (lastEvent && npcs[key].permanentFacts) {
-                        const factIdx = npcs[key].permanentFacts.findIndex(
-                            f => f.auto && f.text === lastEvent.text
-                        );
-                        if (factIdx !== -1) npcs[key].permanentFacts.splice(factIdx, 1);
+                    if (npcs[key].enabled && npcs[key].events.length > 0) {
+                        npcs[key].events.pop();
+                        removed++;
                     }
-                    removed++;
                 }
                 if (removed > 0) {
                     await saveNPCs(npcs);
@@ -2846,9 +2180,6 @@ jQuery(async () => {
                     updateInjection();
                 }
                 msgCounter = s.triggerEvery;
-            } else if (lengthUnchanged && !contentChanged && lastBotMessageId !== null) {
-                console.log('[WildOffscreen] Same message seen again — skipping');
-                return;
             }
         } catch(e) {
             console.warn('[WildOffscreen] onBotMessageDone error:', e.message);
@@ -2876,7 +2207,6 @@ jQuery(async () => {
     eventSource.on(event_types.CHAT_CHANGED, () => {
         msgCounter = 0;
         lastChatLength = 0;
-        lastBotMessageId = null;
         setTimeout(async () => {
             try {
                 const ctx = SillyTavern.getContext();
@@ -2885,18 +2215,18 @@ jQuery(async () => {
 
             const newBotKey  = getBotKey();
             const newChatKey = getChatKey();
-            const chatChanged = newChatKey !== _lastChatKey || newBotKey !== _lastBotKey;
+            const sameBotNewChat = newBotKey === _lastBotKey && newChatKey !== _lastChatKey;
 
-            if (chatChanged) {
+            if (sameBotNewChat) {
+                // New chat with same character — check if this chatKey has any stored data
                 const s = getSettings();
-                // Returning to old chat = has stored NPC data (excluding only __internalTime)
-                const chatStore = s.npcData?.[newBotKey]?.[newChatKey] || {};
-                const hasExistingData = Object.keys(chatStore).some(k => k !== '__internalTime');
-
+                const hasExistingData = !!(s.npcData?.[newBotKey]?.[newChatKey]);
                 if (!hasExistingData) {
+                    // Genuinely new chat — clear all runtime data
                     await clearChatData();
-                    toastr.info('New chat — NPC events cleared. Characters retained.');
+                    toastr.info('New chat detected — NPC events cleared. Characters retained.');
                 }
+                // If hasExistingData — returning to an old chat, restore silently
             }
 
             _lastBotKey  = newBotKey;
@@ -2904,11 +2234,9 @@ jQuery(async () => {
 
             renderNPCList();
             updateInjection();
-            updateSceneModeButtons();
             updateDateDisplay();
-            if (typeof refreshTimeInputs === 'function') refreshTimeInputs();
             $('#wo_book_info').html('Bot: ' + getBotKey());
-        }, 300);
+        }, 200);
     });
 
     updateInjection();
