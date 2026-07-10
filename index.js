@@ -2337,10 +2337,7 @@ function buildUI() {
         </div>
         <div class="inline-drawer-content">
 
-            <div style="display:flex;align-items:center;justify-content:space-between;">
-                <label class="checkbox_label"><input type="checkbox" id="wo_toggle" ${s.enabled ? 'checked' : ''} /><span>Enable</span></label>
-                <button id="wo_collapse_all" class="menu_button" title="Collapse / Expand all NPC cards" style="width:auto;padding:2px 8px;font-size:0.8em;opacity:0.7;"><i class="fa-solid fa-angles-up"></i></button>
-            </div>
+            <label class="checkbox_label"><input type="checkbox" id="wo_toggle" ${s.enabled ? 'checked' : ''} /><span>Enable</span></label>
             <div id="wo_status" class="wo_status" style="display:none;"></div>
             <div id="wo_token_count" class="wo_status" style="opacity:0.5;font-style:normal;font-size:0.78em;"></div>
 
@@ -2438,6 +2435,15 @@ function buildUI() {
                         <button id="wo_manual_event_add" class="menu_button" style="width:100%;"><i class="fa-solid fa-pen-to-square"></i> Add Event</button>
                     </div>
 
+                    <div class="wo_section_label" style="margin-top:12px;">Export / Import</div>
+                    <div class="wo_actions">
+                        <button id="wo_export_npcs" class="menu_button"><i class="fa-solid fa-file-export"></i> Export</button>
+                        <label class="menu_button wo_file_btn" style="flex:1;cursor:pointer;" title="Import NPC data from JSON">
+                            <i class="fa-solid fa-file-import"></i> Import
+                            <input type="file" id="wo_import_file" accept=".json" style="display:none;" />
+                        </label>
+                    </div>
+
                 </div>
             </div>
 
@@ -2459,8 +2465,7 @@ function buildUI() {
                         <select id="wo_profile_select" class="text_pole" style="flex:1;"></select>
                         <button id="wo_profile_refresh" class="menu_button" title="Refresh profiles" style="flex-shrink:0;"><i class="fa-solid fa-rotate"></i></button>
                     </div>
-                    <div class="wo_section_label" style="margin-top:10px;">Debug</div>
-                    <button id="wo_debug_toggle" class="menu_button" style="width:100%;opacity:0.7;"><i class="fa-solid fa-bug"></i> Debug notifications: <span id="wo_debug_label">OFF</span></button>
+
                 </div>
             </div>
 
@@ -2620,33 +2625,99 @@ jQuery(async () => {
 
     $('#wo_toggle').on('change', function () { s.enabled = this.checked; saveSettingsDebounced(); updateInjection(); });
 
-    $('#wo_collapse_all').on('click', () => {
-        const cards = $('.wo_npc_events');
-        const anyOpen = cards.filter(':visible').length > 0;
-        if (anyOpen) {
-            cards.slideUp(150);
-            $('#wo_collapse_all i').removeClass('fa-angles-down').addClass('fa-angles-up');
-        } else {
-            cards.slideDown(150);
-            $('#wo_collapse_all i').removeClass('fa-angles-up').addClass('fa-angles-down');
+    // ── Export NPC data ────────────────────────────────────
+    $('#wo_export_npcs').on('click', () => {
+        try {
+            const botKey = getBotKey();
+            const chatKey = getChatKey();
+            const st = getSettings();
+            const identity = st.npcData?.[botKey]?.__npcs || {};
+            const chatStore = st.npcData?.[botKey]?.[chatKey] || {};
+
+            const exportData = {
+                version: 1,
+                botKey,
+                chatKey,
+                exportedAt: new Date().toISOString(),
+                npcs: Object.fromEntries(
+                    Object.entries(identity).map(([name, npc]) => [name, {
+                        ...npc,
+                        ...(chatStore[name] || {})
+                    }])
+                )
+            };
+
+            const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `wo_npcs_${botKey}_${new Date().toISOString().slice(0,10)}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+            toastr.success(`Exported ${Object.keys(exportData.npcs).length} NPCs.`);
+        } catch(e) {
+            toastr.error('Export failed: ' + e.message);
+        }
+    });
+
+    // ── Import NPC data ────────────────────────────────────
+    $('#wo_import_file').on('change', async function () {
+        const file = this.files?.[0];
+        if (!file) return;
+        this.value = '';
+        try {
+            const text = await file.text();
+            const data = JSON.parse(text);
+
+            if (!data.npcs || typeof data.npcs !== 'object') {
+                toastr.error('Invalid export file — no NPC data found.');
+                return;
+            }
+
+            const st = getSettings();
+            const botKey = getBotKey();
+            const chatKey = getChatKey();
+            if (!st.npcData) st.npcData = {};
+            if (!st.npcData[botKey]) st.npcData[botKey] = { __npcs: {} };
+            if (!st.npcData[botKey].__npcs) st.npcData[botKey].__npcs = {};
+            if (!st.npcData[botKey][chatKey]) st.npcData[botKey][chatKey] = {};
+
+            let imported = 0;
+            for (const [name, npc] of Object.entries(data.npcs)) {
+                // Identity (shared across chats)
+                st.npcData[botKey].__npcs[name] = {
+                    name: npc.name || name,
+                    description: npc.description || '',
+                    notes: npc.notes || '',
+                    enabled: npc.enabled ?? true,
+                    searchKeys: npc.searchKeys || [],
+                    lorebookName: npc.lorebookName || '',
+                    lorebookDescription: npc.lorebookDescription || npc.description || '',
+                    entryUid: npc.entryUid ?? null,
+                    pendingIntro: npc.pendingIntro ?? false,
+                };
+                // Runtime (events/facts for this chat)
+                st.npcData[botKey][chatKey][name] = {
+                    events: npc.events || [],
+                    permanentFacts: npc.permanentFacts || [],
+                    lastLocation: npc.lastLocation || null,
+                };
+                imported++;
+            }
+
+            saveSettingsDebounced();
+            renderNPCList();
+            updateInjection();
+            toastr.success(`Imported ${imported} NPCs.`);
+        } catch(e) {
+            toastr.error('Import failed: ' + e.message);
         }
     });
     $('#wo_profile_select').on('change', function () { s.connectionProfile = this.value; saveSettingsDebounced(); });
     $('#wo_profile_refresh').on('click', () => { refreshProfileSelect(); toastr.info('Connection profiles refreshed.'); });
 
     // Debug toggle
-    function updateDebugLabel() {
-        const on = getSettings().debugMode;
-        $('#wo_debug_label').text(on ? 'ON' : 'OFF');
-        $('#wo_debug_toggle').css('opacity', on ? '1' : '0.7');
-    }
-    updateDebugLabel();
-    $('#wo_debug_toggle').on('click', () => {
-        s.debugMode = !s.debugMode;
-        saveSettingsDebounced();
-        updateDebugLabel();
-        toastr.info('Debug notifications ' + (s.debugMode ? 'enabled' : 'disabled'));
-    });
+
     
     $('#wo_max_messages').on('input', function() { s.maxMessages = parseInt(this.value) || 30; saveSettingsDebounced(); });
     $('#wo_max_chars').on('input', function() { s.maxCharsPerMsg = parseInt(this.value) || 2000; saveSettingsDebounced(); });
