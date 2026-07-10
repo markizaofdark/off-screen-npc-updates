@@ -1918,8 +1918,11 @@ async function runGenerationCycle() {
     $('#wo_generate_now span').text('Generating...');
 
     try {
-        // Snapshot event counts before generation
-        const beforeCounts = Object.fromEntries(keys.map(k => [k, npcs[k].events.length]));
+        // Snapshot latest event timestamp per NPC before generation
+        // (event count won't increase when maxEvents is already reached — old ones get sliced off)
+        const beforeTimestamps = Object.fromEntries(
+            keys.map(k => [k, npcs[k].events.length ? npcs[k].events[npcs[k].events.length - 1].timestamp : 0])
+        );
 
         // generateEventsForAllNPCs handles in-scene filtering and saving internally
         const result = await generateEventsForAllNPCs(npcs);
@@ -1931,9 +1934,15 @@ async function runGenerationCycle() {
             return;
         }
 
-        // Re-fetch and check results
+        // Check success by comparing latest event timestamp (works even when maxEvents is capped)
+        const hadNewEvent = (k, npcsSnapshot) => {
+            const ev = npcsSnapshot[k]?.events;
+            if (!ev || !ev.length) return false;
+            return ev[ev.length - 1].timestamp > (beforeTimestamps[k] || 0);
+        };
+
         let npcsAfter = getNPCs();
-        const newEventKeys = keys.filter(k => npcsAfter[k] && (npcsAfter[k].events.length || 0) > (beforeCounts[k] || 0));
+        const newEventKeys = keys.filter(k => hadNewEvent(k, npcsAfter));
 
         if (newEventKeys.length === 0) {
             console.log('[WildOffscreen] First attempt got 0 results, retrying...');
@@ -1945,7 +1954,7 @@ async function runGenerationCycle() {
         updateInjection();
         renderNPCList();
 
-        const generated = keys.filter(k => npcsAfter[k] && (npcsAfter[k].events.length || 0) > (beforeCounts[k] || 0)).length;
+        const generated = keys.filter(k => hadNewEvent(k, npcsAfter)).length;
         console.log('[WildOffscreen] Generated events for', generated, '/', keys.length, 'active NPCs');
 
         if (generated === 0) {
