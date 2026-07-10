@@ -1407,67 +1407,11 @@ function parseSceneInfo() {
 
 // ── Infoblock-based NPC scene detection ───────────────────────────────────
 
-/**
- * Parse characters list from a single message's infoblock.
- * Returns array of character names, or [] if no infoblock found.
- */
-function parseInfoblockChars(mes) {
-    if (!mes || (!hasDatePattern(mes) && !/<div[^>]+border-left[^>]*?>/.test(mes))) return [];
-    try {
-        let raw = null;
-        const divMatch = mes.match(/<div[^>]+border-left[^>]*?>([\s\S]*?)<\/div>/i);
-        if (divMatch) {
-            const inner = normalizeDateStr(divMatch[1].replace(/<[^>]+>/g, '').trim());
-            if (hasDatePattern(inner) || inner.includes('\u2022')) raw = inner;
-        }
-        if (!raw) {
-            const stripped = normalizeDateStr(mes.replace(/<[^>]+>/g, ''));
-            const lineMatch = stripped.match(/.*(?:\d{1,2}\/\d{1,2}|\u2022).*/);
-            if (lineMatch) raw = lineMatch[0].trim();
-        }
-        if (!raw) return [];
-        const parts = raw.split(/\s*[\u2022•]\s*/);
-        // parts[3] = characters
-        const charPart = (parts[3] || '').trim();
-        return charPart ? charPart.split(',').map(s => s.trim()).filter(Boolean) : [];
-    } catch(e) { return []; }
-}
-
-/**
- * Check if an NPC appears in a message's infoblock character list.
- * Exact match or infoblock name contains NPC name (handles full name vs surname).
- */
 // Parse a lorebook key that may be a /regex/flags string
 function parseKeyAsRegex(key) {
     const m = key.match(/^\/(.+)\/([gimsuy]*)$/);
     if (!m) return null;
     try { return new RegExp(m[1], m[2] || 'i'); } catch(e) { return null; }
-}
-
-function npcInInfoblock(npc, mes) {
-    const chars = parseInfoblockChars(mes);
-    if (!chars.length) return false;
-
-    const charsText = chars.join(', ');
-    const npcLower  = npc.name.toLowerCase();
-
-    const directMatch = chars.some(c => {
-        const cl = c.toLowerCase().trim();
-        return cl === npcLower || cl.includes(npcLower);
-    });
-    if (directMatch) return true;
-
-    const keys = Array.isArray(npc.searchKeys) ? npc.searchKeys : [];
-    for (const key of keys) {
-        if (!key || typeof key !== 'string') continue;
-        const rx = parseKeyAsRegex(key);
-        if (rx) {
-            if (rx.test(charsText)) return true;
-        } else {
-            if (key.length >= 2 && charsText.toLowerCase().includes(key.toLowerCase())) return true;
-        }
-    }
-    return false;
 }
 
 /**
@@ -1518,11 +1462,21 @@ function getChatContextForNPC(npc, maxMessages = 30, maxCharsPerMsg = 3000) {
         const chat = ctx.chat || [];
         const nonSystem = chat.filter(m => !m.is_system && m.mes);
 
-        // Find messages where this NPC appears — infoblock or text scan depending on mode
-        const _ctxMode = getSettings().sceneMode || 'infoblock';
+        // Find messages where this NPC appears — keyword scan against message text
         const withNPC = nonSystem.filter(m => {
-    
-            return npcInInfoblock(npcObj, m.mes);
+            const text = m.mes.replace(/<[^>]+>/g, '').toLowerCase();
+            const nl = npcName.toLowerCase();
+            if (text.includes(nl)) return true;
+            const parts = npcName.trim().split(/\s+/).filter(p => p.length > 2);
+            if (parts.some(p => text.includes(p.toLowerCase()))) return true;
+            const keys = Array.isArray(npcObj.searchKeys) ? npcObj.searchKeys : [];
+            for (const key of keys) {
+                if (!key || typeof key !== 'string') continue;
+                const rx = parseKeyAsRegex(key);
+                if (rx) { if (rx.test(text)) return true; }
+                else if (key.length >= 2 && text.includes(key.toLowerCase())) return true;
+            }
+            return false;
         });
 
         let selected;
@@ -2842,7 +2796,7 @@ jQuery(async () => {
                 const npcsIdentity = s.npcData?.[botKey]?.__npcs || {};
                 let changed = false;
                 for (const [name, npc] of Object.entries(npcsIdentity)) {
-                    if (npc.pendingIntro && npcInInfoblock({ name }, lastMsg.mes)) {
+                    if (npc.pendingIntro && npcInRecentMessages({ name, searchKeys: npc.searchKeys || [] }, 1)) {
                         npcsIdentity[name].pendingIntro = false;
                         if (s.activeIntros) delete s.activeIntros[name];
                         changed = true;
@@ -2947,33 +2901,33 @@ jQuery(async () => {
         // doesn't slip through dedup and increment msgCounter before user sends anything.
         lastProcessedMsgId = '0|';
 
-        // Snapshot prev keys synchronously — if CHAT_CHANGED fires twice in quick succession,
-        // the second call would see stale _lastChatKey from a setTimeout not yet run,
-        // mis-detect chatChanged and potentially clear data it shouldn't.
+        // Snapshot prev keys synchronously
         const prevBotKey  = _lastBotKey;
         const prevChatKey = _lastChatKey;
-        _lastBotKey  = getBotKey();
-        _lastChatKey = getChatKey();
 
         setTimeout(async () => {
+            // Read keys AFTER ST has finished switching context
+            const newBotKey  = getBotKey();
+            const newChatKey = getChatKey();
+            _lastBotKey  = newBotKey;
+            _lastChatKey = newChatKey;
+
             try {
                 const ctx = SillyTavern.getContext();
                 lastChatLength = (ctx.chat || []).length;
-                // Sync dedup fingerprint to the last existing message so no pre-existing
-                // messages fire onBotMessageDone and skew the counter.
                 const lastExisting = (ctx.chat || []).slice(-1)[0];
                 lastProcessedMsgId = (lastChatLength - 1) + '|' + (lastExisting?.mes || '').slice(-60);
             } catch(e) {}
 
-            const newBotKey  = getBotKey();
-            const newChatKey = getChatKey();
             const chatChanged = newChatKey !== prevChatKey || newBotKey !== prevBotKey;
 
             if (chatChanged) {
                 const s = getSettings();
-                // Returning to old chat = has stored NPC data (excluding only __internalTime)
                 const chatStore = s.npcData?.[newBotKey]?.[newChatKey] || {};
                 const hasExistingData = Object.keys(chatStore).some(k => k !== '__internalTime');
+
+                // Check if this bot has any NPCs registered at all
+                const hasAnyNPCs = Object.keys(s.npcData?.[newBotKey]?.__npcs || {}).length > 0;
 
                 if (!hasExistingData) {
                     await clearChatData();
@@ -2981,6 +2935,21 @@ jQuery(async () => {
                 } else {
                     const eventCount = Object.values(chatStore).reduce((n, v) => n + (v?.events?.length || 0), 0);
                     debugToast('Returning to existing chat. Events found: ' + eventCount);
+                }
+
+                // Auto-scan lorebook on first open if no NPCs registered for this bot
+                if (!hasAnyNPCs && newBotKey !== 'unknown') {
+                    try {
+                        const { npcs: found, bookNames } = await scanCharacterLorebooks();
+                        if (found.length) {
+                            const { npcs, added } = registerNPCs(found);
+                            await saveNPCs(npcs);
+                            toastr.success(`Auto-scanned: ${found.length} NPCs found from ${bookNames.join(', ')}.`);
+                            $('#wo_book_info').html(`<i class="fa-solid fa-book"></i> ${bookNames.join(', ')} — ${found.length} NPCs`);
+                        }
+                    } catch(e) {
+                        console.warn('[WildOffscreen] Auto-scan failed:', e.message);
+                    }
                 }
             }
 
