@@ -759,7 +759,6 @@ let lastBotMessageId = null; // tracks last bot message to detect rerolls accura
 let isGenerating = false; // guard against re-entrant generation
 let lastProcessedMsgId = null; // deduplicate MESSAGE_RECEIVED + CHARACTER_MESSAGE_RENDERED
 let _chatSwitchPending = false; // true while chat switch is in progress — prevents stale renders
-let _isNewChat = false;        // true for brand-new empty chats until first save — prevents stale chatStore reads
 
 // ── Settings ───────────────────────────────────────────────
 
@@ -868,7 +867,7 @@ function advanceInternalTime() {
 function getNPCs() {
     const store = getNPCStore();
     // While chat switch is pending, don't read chat-specific data — it may point to the old chat
-    const chatStore = (_chatSwitchPending || _isNewChat) ? {} : getChatStore();
+    const chatStore = _chatSwitchPending ? {} : getChatStore();
     const merged = {};
     for (const [name, npc] of Object.entries(store.__npcs)) {
         const runtime = chatStore[name] || {};
@@ -906,7 +905,6 @@ async function saveNPCsPartial(npcs) {
             s.npcData[botKey].__npcs[name].pendingIntro = npc.pendingIntro ?? false;
         }
     }
-    _isNewChat = false; // first real save — chatStore now has a valid key
     console.log('[WildOffscreen] saveNPCsPartial | keys:', Object.keys(npcs), '| chatKey:', chatKey);
     saveSettingsDebounced();
 }
@@ -2339,7 +2337,10 @@ function buildUI() {
         </div>
         <div class="inline-drawer-content">
 
-            <label class="checkbox_label"><input type="checkbox" id="wo_toggle" ${s.enabled ? 'checked' : ''} /><span>Enable</span></label>
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+                <label class="checkbox_label"><input type="checkbox" id="wo_toggle" ${s.enabled ? 'checked' : ''} /><span>Enable</span></label>
+                <button id="wo_collapse_all" class="menu_button" title="Collapse / Expand all NPC cards" style="width:auto;padding:2px 8px;font-size:0.8em;opacity:0.7;"><i class="fa-solid fa-angles-up"></i></button>
+            </div>
             <div id="wo_status" class="wo_status" style="display:none;"></div>
             <div id="wo_token_count" class="wo_status" style="opacity:0.5;font-style:normal;font-size:0.78em;"></div>
 
@@ -2618,6 +2619,18 @@ jQuery(async () => {
     $('#wo_scan_position').on('change', function () { s.scanPosition = this.value; saveSettingsDebounced(); });
 
     $('#wo_toggle').on('change', function () { s.enabled = this.checked; saveSettingsDebounced(); updateInjection(); });
+
+    $('#wo_collapse_all').on('click', () => {
+        const cards = $('.wo_npc_events');
+        const anyOpen = cards.filter(':visible').length > 0;
+        if (anyOpen) {
+            cards.slideUp(150);
+            $('#wo_collapse_all i').removeClass('fa-angles-down').addClass('fa-angles-up');
+        } else {
+            cards.slideDown(150);
+            $('#wo_collapse_all i').removeClass('fa-angles-up').addClass('fa-angles-down');
+        }
+    });
     $('#wo_profile_select').on('change', function () { s.connectionProfile = this.value; saveSettingsDebounced(); });
     $('#wo_profile_refresh').on('click', () => { refreshProfileSelect(); toastr.info('Connection profiles refreshed.'); });
 
@@ -2908,13 +2921,18 @@ jQuery(async () => {
         msgCounter = 0;
         lastChatLength = 0;
         lastBotMessageId = null;
+        // Pre-set to a fingerprint matching index 0 so the initial bot greeting
+        // doesn't slip through dedup and increment msgCounter before user sends anything.
         lastProcessedMsgId = '0|';
+        // Block stale data reads until new chat context is ready
         _chatSwitchPending = true;
 
+        // Snapshot prev keys synchronously
         const prevBotKey  = _lastBotKey;
         const prevChatKey = _lastChatKey;
 
         setTimeout(async () => {
+            // Read keys AFTER ST has finished switching context
             const newBotKey  = getBotKey();
             const newChatKey = getChatKey();
             _lastBotKey  = newBotKey;
@@ -2927,31 +2945,25 @@ jQuery(async () => {
                 lastProcessedMsgId = (lastChatLength - 1) + '|' + (lastExisting?.mes || '').slice(-60);
             } catch(e) {}
 
-            const botChanged  = newBotKey  !== prevBotKey;
-            const chatChanged = newChatKey !== prevChatKey || botChanged;
+            const chatChanged = newChatKey !== prevChatKey || newBotKey !== prevBotKey;
 
             if (chatChanged) {
                 const s = getSettings();
+                const chatStore = s.npcData?.[newBotKey]?.[newChatKey] || {};
+                const hasExistingData = Object.keys(chatStore).some(k => k !== '__internalTime');
 
-                // New chat detection: getChatKey() returns 'default' when the new chat
-                // has no id yet (ST hasn't saved it). This is the most reliable signal —
-                // chat.length is unreliable because greeting may already be present.
-                const isNewChat = newChatKey === 'default';
+                // Check if this bot has any NPCs registered at all
+                const hasAnyNPCs = Object.keys(s.npcData?.[newBotKey]?.__npcs || {}).length > 0;
 
-                if (!isNewChat) {
-                    // Existing chat — just load its data, never clear anything
-                    _isNewChat = false;
-                    const chatStore = s.npcData?.[newBotKey]?.[newChatKey] || {};
-                    const eventCount = Object.values(chatStore).filter(v => v?.events).reduce((n, v) => n + v.events.length, 0);
-                    debugToast('Chat loaded. Events: ' + eventCount);
+                if (!hasExistingData) {
+                    await clearChatData(newBotKey, newChatKey);
+                    debugToast('New chat — events cleared. Characters retained.');
                 } else {
-                    // New chat — suppress chatStore reads until first save gives us a real chatKey
-                    _isNewChat = true;
-                    debugToast('New chat — starting fresh.');
+                    const eventCount = Object.values(chatStore).reduce((n, v) => n + (v?.events?.length || 0), 0);
+                    debugToast('Returning to existing chat. Events found: ' + eventCount);
                 }
 
-                // Auto-scan lorebook if no NPCs registered for this bot yet
-                const hasAnyNPCs = Object.keys(s.npcData?.[newBotKey]?.__npcs || {}).length > 0;
+                // Auto-scan lorebook on first open if no NPCs registered for this bot
                 if (!hasAnyNPCs && newBotKey !== 'unknown') {
                     try {
                         const { npcs: found, bookNames } = await scanCharacterLorebooks();
@@ -2967,6 +2979,18 @@ jQuery(async () => {
                 }
             }
 
+            // Safety: if getChatKey() still returns 'default' at render time,
+            // clear it so stale events from a previous chat don't show up
+            if (chatChanged) {
+                const s = getSettings();
+                const resolvedChatKey = getChatKey();
+                if (resolvedChatKey === 'default') {
+                    const bk = getBotKey();
+                    if (s.npcData?.[bk]?.['default']) delete s.npcData[bk]['default'];
+                }
+            }
+
+            // Chat context is now ready — allow normal data reads again
             _chatSwitchPending = false;
 
             renderNPCList();
@@ -2976,5 +3000,6 @@ jQuery(async () => {
             $('#wo_book_info').html('Bot: ' + getBotKey());
         }, 300);
     });
+
     updateInjection();
 });
