@@ -957,12 +957,17 @@ async function deleteNPC(name) {
     saveSettingsDebounced();
 }
 
-async function clearChatData() {
+async function clearChatData(explicitBotKey, explicitChatKey) {
     const s = getSettings();
-    const botKey = getBotKey();
-    const chatKey = getChatKey();
+    const botKey  = explicitBotKey  || getBotKey();
+    const chatKey = explicitChatKey || getChatKey();
     if (s.npcData?.[botKey]?.[chatKey]) {
         delete s.npcData[botKey][chatKey];
+    }
+    // Also clear the 'default' fallback slot for this bot to avoid stale data
+    // showing up when getChatKey() couldn't resolve a proper id yet
+    if (s.npcData?.[botKey]?.['default'] && chatKey !== 'default') {
+        delete s.npcData[botKey]['default'];
     }
     saveSettingsDebounced();
     updateDateDisplay();
@@ -2930,7 +2935,7 @@ jQuery(async () => {
                 const hasAnyNPCs = Object.keys(s.npcData?.[newBotKey]?.__npcs || {}).length > 0;
 
                 if (!hasExistingData) {
-                    await clearChatData();
+                    await clearChatData(newBotKey, newChatKey);
                     debugToast('New chat — events cleared. Characters retained.');
                 } else {
                     const eventCount = Object.values(chatStore).reduce((n, v) => n + (v?.events?.length || 0), 0);
@@ -2950,6 +2955,17 @@ jQuery(async () => {
                     } catch(e) {
                         console.warn('[WildOffscreen] Auto-scan failed:', e.message);
                     }
+                }
+            }
+
+            // Safety: if getChatKey() still returns 'default' at render time,
+            // clear it so stale events from a previous chat don't show up
+            if (chatChanged) {
+                const s = getSettings();
+                const resolvedChatKey = getChatKey();
+                if (resolvedChatKey === 'default') {
+                    const bk = getBotKey();
+                    if (s.npcData?.[bk]?.['default']) delete s.npcData[bk]['default'];
                 }
             }
 
