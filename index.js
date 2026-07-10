@@ -2951,13 +2951,15 @@ jQuery(async () => {
             const hasExistingData = !chatIsEmpty && Object.keys(chatStore).some(k => k !== '__internalTime');
             const hasAnyNPCs = Object.keys(s.npcData?.[newBotKey]?.__npcs || {}).length > 0;
 
-            if (!hasExistingData) {
-                // Don't call clearChatData for new chats — there's nothing to clear yet
-                if (!chatIsEmpty) await clearChatData(newBotKey, newChatKey);
+            if (chatIsEmpty) {
+                // Brand-new chat — nothing to clear yet, just start fresh
                 debugToast('New chat — starting fresh.');
-            } else {
+            } else if (hasExistingData) {
                 const eventCount = Object.values(chatStore).reduce((n, v) => n + (v?.events?.length || 0), 0);
                 debugToast('Returning to existing chat. Events found: ' + eventCount);
+            } else {
+                // Existing chat but no events yet — that's fine, don't clear anything
+                debugToast('Returning to chat — no events yet.');
             }
 
             // Auto-scan lorebook on first open if no NPCs registered for this bot
