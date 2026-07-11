@@ -760,6 +760,7 @@ let isGenerating = false; // guard against re-entrant generation
 let lastProcessedMsgId = null; // deduplicate MESSAGE_RECEIVED + CHARACTER_MESSAGE_RENDERED
 let _chatSwitchPending = false; // true while chat switch is in progress — prevents stale renders
 let _isNewChat = false;        // true for brand-new chats until first save — prevents stale chatStore reads
+let _lastRerollTime = 0;       // timestamp of last reroll — cooldown to prevent multiple pops
 
 // ── Settings ───────────────────────────────────────────────
 
@@ -2947,7 +2948,12 @@ jQuery(async () => {
 
             const lastMsg = (ctx.chat || []).slice(-1)[0];
             const lastMsgIsBot = lastMsg && !lastMsg.is_user && !lastMsg.is_system;
-            const currentMsgId = lastMsgIsBot ? (lastMsg.mes || '').slice(0, 80) : null;
+            // Fingerprint = length + first 60 chars + last 40 chars
+            // More reliable than just first 80 chars — catches rerolls with similar openings
+            const mes = lastMsg?.mes || '';
+            const currentMsgId = lastMsgIsBot
+                ? `${mes.length}|${mes.slice(0, 60)}|${mes.slice(-40)}`
+                : null;
 
             // Update state immediately so any re-entrant call sees current values
             lastChatLength = currentLength;
@@ -2967,6 +2973,18 @@ jQuery(async () => {
             const isReroll = lengthUnchanged && contentChanged && prevBotMessageId !== null;
 
             if (isReroll) {
+                // Cooldown: ST can fire CHARACTER_MESSAGE_RENDERED multiple times
+                // for a single reroll (post-processing, macro expansion, etc.)
+                // These duplicates arrive within milliseconds. Genuine user rerolls
+                // take at least 1-2 seconds. 1s cooldown catches duplicates but
+                // allows rapid intentional rerolls.
+                const now = Date.now();
+                if (now - _lastRerollTime < 1000) {
+                    console.log('[WildOffscreen] Reroll detected but within cooldown — skipping');
+                    return;
+                }
+                _lastRerollTime = now;
+
                 console.log('[WildOffscreen] Reroll confirmed — content changed, removing last events');
                 debugToast('Reroll detected — removing last events');
                 const npcs = getNPCs();
@@ -2989,7 +3007,10 @@ jQuery(async () => {
                     renderNPCList();
                     updateInjection();
                 }
-                msgCounter = s.triggerEvery;
+                // Immediately generate new events for this reroll — don't go through msgCounter
+                msgCounter = 0;
+                runGenerationCycle();
+                return;
             } else if (lengthUnchanged && !contentChanged && prevBotMessageId !== null) {
                 console.log('[WildOffscreen] Same message seen again — skipping');
                 return;
@@ -3038,7 +3059,8 @@ jQuery(async () => {
                 const ctx = SillyTavern.getContext();
                 lastChatLength = (ctx.chat || []).length;
                 const lastExisting = (ctx.chat || []).slice(-1)[0];
-                lastProcessedMsgId = (lastChatLength - 1) + '|' + (lastExisting?.mes || '').slice(-60);
+                const lastMes = lastExisting?.mes || '';
+                lastProcessedMsgId = (lastChatLength - 1) + '|' + lastMes.length + '|' + lastMes.slice(0, 60) + '|' + lastMes.slice(-40);
             } catch(e) {}
 
             const chatChanged = newChatKey !== prevChatKey || newBotKey !== prevBotKey;
